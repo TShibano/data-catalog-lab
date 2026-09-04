@@ -8,13 +8,14 @@
 ### リポジトリ
 - `README.md` と `CLAUDE.md` のみ．`compose/` `configs/` `scripts/` `examples/` `docs/` `plans/` はいずれも未作成．
 
-### ローカル環境（実測）
+### ローカル環境（実測・2026-09-05 更新後）
 | 項目 | 実測値 | 判定 |
 | --- | --- | --- |
-| podman | 5.8.1（darwin/arm64，provider: libkrun） | OK |
-| podman machine | CPU 4 / Memory 3.725GiB / Disk 30GiB，**停止中** | **要拡張** |
-| podman-compose | 未インストール | **要インストール** |
-| docker / docker-compose | 未インストール | — |
+| podman | 6.1.1（darwin/arm64，provider: libkrun） | OK |
+| podman machine | CPU 4 / Memory 9.312GiB / Disk 22GiB（うち空き 20GiB），起動中 | OK（ディスクのみ注意） |
+| podman-compose | 1.6.0（Homebrew，`/opt/homebrew/bin/podman-compose`） | OK |
+| `podman compose` | 上記 podman-compose を external provider として委譲 | OK |
+| docker / docker-compose | 未インストール（`~/.docker/cli-plugins` は Docker Desktop 削除済みの壊れた symlink） | — |
 
 ### 各ツールの公式要件（2026-09 時点）
 | | OpenMetadata | DataHub |
@@ -116,13 +117,17 @@ data-catalog-lab/
 
 ## 6. リスクと未決事項
 
-1. **podman machine のメモリ不足（要対応）**
-   現状 3.725GiB は両ツールの要件（6〜8GB）を下回る．少なくとも 10GiB / disk 60GiB 程度への再作成が必要．
-   `podman machine rm` を伴うため**既存コンテナ・イメージが消える**．実行は要確認．
-2. **`podman-compose` が未インストール（要対応）**
-   `pipx install podman-compose` もしくは `brew install podman-compose`．グローバルインストールになるため要確認．
-3. **DataHub quickstart compose の profiles 依存**
-   公式ファイルは `COMPOSE_PROFILES` を前提としており，`podman-compose` の profiles 対応は要検証．動かない場合の代替は (a) profile を展開した compose を本リポジトリに固定，(b) 旧形式の quickstart ファイルを使う．ステップ 3 の最初に検証する．
+1. ~~podman machine のメモリ不足~~ **解消済み**（3.725GiB → 9.312GiB，podman も 6.1.1 へ更新）．
+   ただし **disk 22GiB（空き 20GiB）** は，DataHub 単体で 13GB を要求するため両ツールのイメージを同居させると逼迫する．
+   対応: ツールを切り替える際に `podman image prune` を挟む．足りなければ `podman machine set --disk-size` で拡張．
+2. ~~podman-compose 未インストール~~ **解消済み**（Homebrew で 1.6.0）．
+   `podman compose` は external provider としてこれを呼ぶ構成になった．スクリプトの `compose_cmd()` は `podman compose` を第一候補とする．
+3. **DataHub quickstart compose と podman-compose の互換性**
+   `--profile` オプション自体は podman-compose 1.6.0 に存在する（`--help` で確認済み）．
+   残る懸念は `depends_on` の `condition: service_healthy` など Compose Spec の細部で，podman-compose は Docker Compose の別実装のため差異が出やすい．ステップ 3 の冒頭で検証し，詰まった場合の代替は次の順で試す．
+   (a) `brew install docker-compose` して `podman compose` の provider を本家 Compose v2 に切り替える（互換性が最も高い）
+   (b) profile を展開した compose を本リポジトリに固定する
+   (c) 旧形式の quickstart ファイルを使う
 4. **ポート衝突**
    OpenMetadata（8080 Airflow / 9200 ES / 3306 MySQL）と DataHub（8080 GMS / 9200 OpenSearch / 3306 MySQL）が重複する．
    方針: **既定では同時起動しない**．同時比較したい場合に備え，`docker-compose.override.yml` でホスト側ポートをずらせるようにしておく．
@@ -131,7 +136,16 @@ data-catalog-lab/
 6. **バージョン固定**
    OpenMetadata 2.0.1 / DataHub 1.7.0 を `versions.env` に固定．`latest` は使わない．
 
-## 7. 最初に確認したいこと
+## 7. 未確認事項
 
-- 上記 6-1（podman machine 再作成）と 6-2（`podman-compose` インストール）を進めてよいか．
 - Containerfile の位置づけを「インジェスト用の薄い拡張イメージ」とする方針（2.1）でよいか．
+
+## 8. 補足: 環境まわりの小ネタ
+
+- `podman compose` は実行のたびに `>>>> Executing external compose provider ... <<<<` を出す．
+  `~/.config/containers/containers.conf` に次を書けば黙る．
+  ```toml
+  [engine]
+  compose_warning_logs = false
+  ```
+- `~/.docker/cli-plugins/` に Docker Desktop 削除後の壊れた symlink が残っている．実害はないが掃除してよい．
