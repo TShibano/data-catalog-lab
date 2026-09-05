@@ -1,0 +1,58 @@
+# 本リポジトリ向けの上書き．
+# upstream (compose.upstream.yml) はバイト列を一切編集しないため，
+# ポート・ボリューム・メモリ制限の調整はすべてここに書く．
+#
+# compose の複数ファイル指定は「マージ」であり「後勝ち」ではない点に注意．
+# - マッピング（environment 等）はキー単位でマージされる．
+# - シーケンス（ports 等）は既定では upstream の値に追記される．
+#   ホスト側ポートを変えても複合キーが変わるため upstream の bind も残ってしまう．
+#   そのため ports は `!override` タグで明示的に置き換える．
+# - volumes はマウント先パスをキーに一意判定されるため，同じ target を指定すれば
+#   upstream の bind mount は named volume に置換される（追記ではなく上書き）．
+#
+# 【既知の不具合】podman-compose 1.6.0 は `!override` タグで包んだノードの中で
+# ${VAR} / ${VAR:-default} を一切展開しない（実機で確認済み．原因は
+# podman_compose.py の rec_subs が dict/str/list 以外の OverrideTag インスタンスを
+# 再帰対象と見なさず中身を素通りするため）．そのため ports の値は
+# 変数ではなく upstream と同じリテラル値を直接書く．
+# ポートをずらしたい場合（DataHub との同時起動など）は，この override とは別に
+# compose.altports.yml を 3 枚目として重ねる（scripts/lib.sh の
+# om_compose_files() / OM_ALT_PORTS=1 を参照）．
+
+volumes:
+  # upstream は ./docker-volume/db-data への bind mount を使うが，
+  # 本リポジトリでは named volume にしてホスト側のディレクトリ管理から切り離す．
+  om-db-data:
+
+services:
+  mysql:
+    # target が upstream と同じ /var/lib/mysql なので，このエントリが
+    # upstream の bind mount 定義を置換する（volumes は target キーでマージされる）．
+    volumes:
+      - om-db-data:/var/lib/mysql
+    ports: !override
+      - "3306:3306"
+    # mysql は他サービスに比べて要求が小さいため 1g を割り当てる．
+    mem_limit: 1g
+
+  elasticsearch:
+    ports: !override
+      - "9200:9200"
+      - "9300:9300"
+    # upstream の ES_JAVA_OPTS がヒープ 1G を要求するため，
+    # JVM 外のオーバーヘッド込みで 2g を確保する．
+    mem_limit: 2g
+
+  openmetadata-server:
+    ports: !override
+      - "8585:8585"
+      - "8586:8586"
+    # upstream の OPENMETADATA_HEAP_OPTS がヒープ 1G を要求するため，
+    # JVM 外のオーバーヘッド込みで 2g を確保する．
+    mem_limit: 2g
+
+  ingestion:
+    ports: !override
+      - "8080:8080"
+    # Airflow scheduler + webserver を同一コンテナで動かすため 2g を確保する．
+    mem_limit: 2g

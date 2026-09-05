@@ -1,0 +1,23 @@
+# OpenMetadata の公式 ingestion イメージを土台にした薄い拡張レイヤ．
+# このステップではビルド検証を行わない（実際のインジェスト定義とビルド確認はステップ4）．
+#
+# 注意: ベースイメージのタグ（2.0.1）は
+# ../configs/openmetadata.env の OPENMETADATA_INGESTION_IMAGE，
+# および shared/scripts/versions.env の OM_VERSION（2.0.1）と揃えること．
+# upstream 既定の docker.getcollate.io ミラーは匿名 pull の制限が厳しく
+# 実機で toomanyrequests になったため，同一イメージが公開されている
+# docker.io/openmetadata/* の 2.0.1 タグ（arm64 対応済み）を使う．
+# サーバ側イメージを上げる場合はここも同じバージョンへ揃えて変更すること．
+FROM docker.io/openmetadata/ingestion:2.0.1
+
+# 追加コネクタ（postgres / mysql / dbt）．
+# バージョンはベースイメージの openmetadata-ingestion と必ず一致させる．
+RUN pip install --no-cache-dir 'openmetadata-ingestion[postgres,mysql,dbt]==2.0.1'
+
+# インジェスト定義（recipe）を配置する．
+# ビルドコンテキストは openmetadata/ 直下なのでそのまま参照できる．
+COPY configs/ /opt/ingestion/configs/
+
+# インジェストコマンド（metadata）に寄せる．
+# 実際の実行はステップ4の ingest.sh から `<this> ingest -c /opt/ingestion/configs/<recipe>.yml` 等で行う想定．
+ENTRYPOINT ["metadata"]
