@@ -1,0 +1,65 @@
+# 本リポジトリ向けの上書き．
+# upstream (compose.upstream.yml) はバイト列を一切編集しないため，
+# ポートとメモリ制限の調整はすべてここに書く．
+#
+# compose の複数ファイル指定は「マージ」であり「後勝ち」ではない点に注意．
+# - マッピング（environment 等）はキー単位でマージされる．
+# - シーケンス（ports 等）は既定では upstream の値に追記される．
+#   ホスト側ポートを変えても複合キーが変わるため upstream の bind も残ってしまう．
+#   そのため ports は `!override` タグで明示的に置き換える（OpenMetadata 側と同じ方針）．
+#
+# 【既知の不具合】podman-compose 1.6.0 は `!override` タグで包んだノードの中で
+# ${VAR} / ${VAR:-default} を一切展開しない（OpenMetadata 側の compose.override.yml
+# で実機確認済みの不具合と同じ）．そのため ports の値は変数ではなくリテラル値を
+# 直接書く．upstream は long syntax（mode/target/published/protocol）だが，
+# !override で置き換えた後は short syntax（"HOST:CONTAINER"）でよいことを
+# `config` の出力で確認済み．
+#
+# ポートをずらしたい場合（OpenMetadata との同時起動など）は，この override とは
+# 別に compose.altports.yml を 3 枚目として重ねる（scripts/lib.sh の
+# dh_compose_files() / DATAHUB_ALT_PORTS=1 を参照）．
+#
+# --- メモリ制限について ---
+# podman machine のメモリは 9.3GiB（実測）．DataHub の quickstart profile は
+# 7 サービス構成で，同時に立ち上がるとメモリを食い合い OOM しやすいため，
+# 主要な 6 サービスに mem_limit を割り当てる．内訳（合計 8g，機械の 9.3GiB に収まる）．
+#   opensearch                2g（upstream の OPENSEARCH_JAVA_OPTS がヒープ 1024m を要求）
+#   kafka-broker               1g（upstream の KAFKA_HEAP_OPTS がヒープ 512m を要求）
+#   datahub-gms-quickstart     2g（upstream の JAVA_OPTS がヒープ 1g を要求）
+#   frontend-quickstart        1g（upstream の JAVA_OPTS がヒープ 512m を要求）
+#   mysql                      1g（他サービスに比べて要求が小さい）
+#   datahub-actions-quickstart 1g（軽量な Python プロセス）
+# system-update-quickstart（起動時に一度だけ走るマイグレーションジョブ）は
+# 対象に含めていない．upstream で足りているため触らない．
+
+services:
+  mysql:
+    ports: !override
+      - "3306:3306"
+    mem_limit: 1g
+
+  opensearch:
+    ports: !override
+      - "9200:9200"
+    mem_limit: 2g
+
+  kafka-broker:
+    ports: !override
+      - "9092:9092"
+    mem_limit: 1g
+
+  datahub-gms-quickstart:
+    # upstream は 8080（GMS 本体）と 4319（OpenTelemetry 系と思われる）の
+    # 2 つを公開している．4319 を落とさないよう両方明示する．
+    ports: !override
+      - "8080:8080"
+      - "4319:4319"
+    mem_limit: 2g
+
+  frontend-quickstart:
+    ports: !override
+      - "9002:9002"
+    mem_limit: 1g
+
+  datahub-actions-quickstart:
+    mem_limit: 1g

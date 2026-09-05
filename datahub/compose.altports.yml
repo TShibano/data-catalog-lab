@@ -1,0 +1,34 @@
+# OpenMetadata と同時起動したいときだけ重ねる 3 枚目の override．
+# 既定では使わない．scripts/lib.sh の dh_compose_files() が
+# DATAHUB_ALT_PORTS=1 のときだけこのファイルを -f で追加する．
+#   例: DATAHUB_ALT_PORTS=1 ./datahub/scripts/up.sh
+#
+# ずらす対象は OpenMetadata と衝突する 3 サービスのみ．
+#   mysql                   3306 -> 23306
+#   opensearch              9200 -> 29200
+#   datahub-gms-quickstart  8080 -> 28080（4319 は OpenMetadata と衝突しないため据え置き）
+# frontend-quickstart の 9002 は OpenMetadata（UI 8585）と衝突しないため
+# ここでは触らない．そのため UI の URL は常に http://localhost:9002 のまま．
+#
+# ここで gms のポート番号（8080 / 28080）を変えたら，scripts/lib.sh の
+# dh_compose_files() が設定する DH_GMS_PORT の対応表も合わせて変えること
+# （status.sh など GMS の URL を組み立てる側はそちらを参照しており，
+# ここには直接依存していないため，2 箇所がずれないよう手動で揃える必要がある）．
+#
+# !override を使う理由・変数展開の不具合は compose.override.yml と同じ
+# （ports は追記マージされるため明示的に置き換える必要があり，かつ
+# !override タグ内では ${VAR} が展開されないので直接リテラル値を書く）．
+
+services:
+  mysql:
+    ports: !override
+      - "23306:3306"
+
+  opensearch:
+    ports: !override
+      - "29200:9200"
+
+  datahub-gms-quickstart:
+    ports: !override
+      - "28080:8080"
+      - "4319:4319"

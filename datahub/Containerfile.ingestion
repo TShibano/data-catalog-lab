@@ -1,0 +1,27 @@
+# DataHub の ingestion CLI 用の薄い拡張イメージ．
+# OpenMetadata と違い DataHub には公式の ingestion 専用イメージが配布されていないため，
+# python:3.11-slim を土台に acryl-datahub を pip install する．
+#
+# このステップ（DataHub のスタック追加）ではビルド検証を行わない．
+# 実際のインジェスト定義とビルド確認はステップ4で行う．
+#
+# 注意: extras に指定するバージョン（1.7.0，v 接頭辞なし）は PyPI の
+# acryl-datahub のバージョン表記であり，datahub/configs/datahub.env の
+# UI_INGESTION_DEFAULT_CLI_VERSION，および shared/scripts/versions.env の
+# DATAHUB_VERSION と揃えること．
+# （datahub.env の DATAHUB_VERSION は v 接頭辞付きの Docker イメージタグで
+#  意味が異なる点に注意．詳細は datahub/configs/datahub.env のコメントを参照．）
+FROM docker.io/library/python:3.11-slim
+
+# datahub-rest（GMS への REST 送信）/ postgres / mysql / dbt の各コネクタを同梱．
+# バージョンは上記コメントの通り 1.7.0 に固定する．
+RUN pip install --no-cache-dir 'acryl-datahub[datahub-rest,postgres,mysql,dbt]==1.7.0'
+
+# インジェスト定義（recipe）を配置する．
+# ビルドコンテキストは datahub/ 直下なのでそのまま参照できる．
+COPY configs/ /opt/ingestion/configs/
+
+# インジェストコマンド（datahub）に寄せる．
+# 実際の実行はステップ4の ingest.sh から
+# `datahub ingest -c /opt/ingestion/configs/recipes/<recipe>.yml` 等で行う想定．
+ENTRYPOINT ["datahub"]
