@@ -31,7 +31,7 @@ data-catalog-lab/
 ├── datahub/                # DataHub 一式（構成は openmetadata/ と同じ）
 ├── shared/
 │   └── scripts/            # 事前チェック・compose 取得などの共通スクリプト
-├── examples/
+├── examples/                # 検証用サンプルデータ（内容は examples/README.md 参照）
 │   ├── sample-data/            # 検証用スキーマ・データ（DDL / INSERT，両ツール共通）
 │   └── postgres/               # インジェスト対象のサンプル DB（compose 定義 + scripts）
 ├── docs/
@@ -52,7 +52,7 @@ data-catalog-lab/
 
 ### サンプル DB を起動する
 
-インジェスト対象のサンプルデータ（`examples/sample-data/`）を投入した PostgreSQL を起動する．OpenMetadata・DataHub のどちらのスタックとも別 compose プロジェクトなので，どちらを検証する場合でも先にこれを起動しておく．
+インジェスト対象のサンプルデータ（`examples/sample-data/`）を投入した PostgreSQL を起動する．スキーマとデータの内容は [examples/README.md](examples/README.md) にまとめてある．OpenMetadata・DataHub のどちらのスタックとも別 compose プロジェクトなので，どちらを検証する場合でも先にこれを起動しておく．
 
 ```sh
 ./examples/postgres/scripts/up.sh
