@@ -5,7 +5,7 @@
 - 検証日: 2026-09-05．
 - 対象バージョン: OpenMetadata **2.0.1** ／ DataHub **1.7.0**．本ドキュメントの内容はこの 1 回・このバージョンの組み合わせでの検証結果であり，将来のバージョンでは状況が変わりうる．
 - 検証環境: podman 6.1.1／podman-compose 1.6.0（`podman compose` の external provider として利用）／podman machine: CPU 4・メモリ 9.3GiB（9536MiB）・ディスク 40GB／ホストは Apple Silicon（arm64）の macOS．
-- 検証方法の限定（重要）: 両ツールとも**操作はすべて REST API（curl）経由**で行った．ブラウザで UI を開いての操作・目視確認は一切していない．そのため **UI の使い勝手についてはこのドキュメントでは評価しない**（両ツールとも「未評価」）．
+- 検証方法の限定（重要）: 両ツールとも**操作はすべて REST API（curl）経由**で行った．ブラウザで UI を開いての操作・目視確認は一切していない．そのため **UI の使い勝手についてはこのドキュメントでは評価しない**（両ツールとも「未評価」）．なお，後述の「システムスキーマの既定の扱い」の問題は，利用者が実際にブラウザで OpenMetadata の Explore を開き，情報スキーマ混入分も含めて 816 件が並びサンプルデータが見つけにくいと報告したことが発端である．これは取り込み件数の問題を UI 上で発見したという経緯であり，UI の使い勝手そのものを評価したわけではないため，UI の使い勝手は引き続き「未評価」のまま扱う．
 - 起動時間・実メモリ使用量（`podman stats` 相当）は計測していない．**未計測**．理由: `podman compose up -d` 自体が `depends_on: condition: service_healthy` を待って返るため，スクリプト側の待機ループの経過時間はツール間で公平に比較できる形で記録できていない．
 
 再現手順はこのドキュメントには書かない．各スクリプトを参照すること．
@@ -28,6 +28,7 @@
 | 既定値のない（＝実質必須の）環境変数の数 | 0 個（upstream compose は全て `${VAR:-default}` 形式） | 4 個（`DATAHUB_VERSION` / `DATAHUB_TOKEN_SERVICE_SALT` / `DATAHUB_TOKEN_SERVICE_SIGNING_KEY` / `UI_INGESTION_DEFAULT_CLI_VERSION`） |
 | インジェストの認証 | JWT 必須（`ingestion-bot`） | quickstart 既定では認証なし |
 | メタデータ／リネージの実行単位 | 別パイプライン（`source.type: postgres` と `postgres-lineage` を分けて 2 回 `metadata ingest` を実行） | 単一 recipe（`include_view_lineage: true`）で 1 回の `datahub ingest` に統合 |
+| システムスキーマの既定の扱い | 既定で `information_schema` まで取り込む（未設定時は 816 エンティティ．`schemaFilterPattern.includes: ["^public$"]` を明示して `public` のみ 38 件に絞り込み済み） | 既定で `public` の 5 データセットのみを取り込み，システムスキーマは自動的に除外される |
 | 今回のリネージ検証（`customer_order_summary`） | 上流 3 テーブル，列単位マッピング 7 件（API レスポンス実測） | 上流 3 データセット，`fineGrainedLineages` 6 件（API レスポンス実測） |
 | ポート衝突（既定起動時） | 3306 / 9200,9300 / 8080 が DataHub と衝突 | 3306 / 9200 / 8080 が OpenMetadata と衝突 |
 | 同時起動の回避策 | `OM_ALT_PORTS=1`（mysql→13306, es→19200/19300, ingestion→18080．server の 8585/8586 は据え置き） | `DATAHUB_ALT_PORTS=1`（mysql→23306, opensearch→29200, gms→28080．frontend の 9002 は据え置き） |
@@ -61,6 +62,7 @@ DataHub の upstream compose は全サービスに `profiles:` が付与され�
 - リリースタグ（2.0.1）と，compose 内に書かれた既定イメージタグ（2.0.0）が食い違っていた．`docker.io/openmetadata/*:2.0.1` を明示指定することで解消した．
 - インジェストの JWT 取得手順が公式ドキュメントだけでは分かりにくく，実機で API を叩いて調べる必要があった（詳細は次の「認証」節）．
 - メタデータとリネージが別パイプラインで，しかも `source.type` を `postgres` と `postgres-lineage` で使い分けないと `metadata ingest` が例外（`AttributeError`）で落ちることが実機での試行錯誤で判明した．`metadata lineage` という別サブコマンドも存在するが，これは 1 本の生 SQL を手動でリネージ登録する ad-hoc 用途で，今回の用途には使えなかった．詳細は `openmetadata/configs/ingestion/postgres_lineage.yaml` のコメントを参照．
+- `sourceConfig.config.schemaFilterPattern` を明示しないと `information_schema` などシステムスキーマまで取り込まれることが，ステップ 1〜5 完了後に UI で確認して判明した（実測 816 エンティティ，詳細は「取り込み結果」節）．`schemaFilterPattern.includes: ["^public$"]` を指定して解決したが，`DatabaseServiceMetadataPipeline`（`postgres_metadata.yaml`）と `DatabaseServiceQueryLineagePipeline`（`postgres_lineage.yaml`）の両方に別々に指定する必要があり，片方だけでは取り込み範囲が揃わない．
 
 **DataHub**
 - イメージタグに `v` 接頭辞が必要（`v1.7.0`）で，compose 取得 URL 用のバージョン表記（`1.7.0`，`v` なし）と食い違っていた．同じ「DataHub 1.7.0」でも参照する場所によって表記が違う点は，バージョンを上げる際の見落としリスクになる．
@@ -93,7 +95,15 @@ OpenMetadata はインジェストに JWT（`ingestion-bot` のトークン）�
 
 ## 取り込み結果（API レスポンス実測）
 
-両ツールとも `examples/sample-data/` の 3 テーブル（`customers` / `orders` / `order_items`）と 2 ビュー（`order_details` / `customer_order_summary`）を取り込めた．
+両ツールとも `examples/sample-data/` の 3 テーブル（`customers` / `orders` / `order_items`）と 2 ビュー（`order_details` / `customer_order_summary`）を取り込めた．ただし，取り込み**範囲**の既定挙動には大きな差があった．
+
+### システムスキーマの既定の扱い（挙動差）
+
+- OpenMetadata の postgres コネクタは `schemaFilterPattern` を指定しない既定状態では `information_schema` まで丸ごと取り込む．実機で確認したところ，サンプル DB の 5 テーブル／ビューに対して **816 エンティティ**（内訳: `tableColumn` 728 / `table` 74〔`public` 5 + `information_schema` 69〕/ `storedProcedure` 11 / `databaseSchema`・`database` 3）が生成され，スキーマ別では `information_schema` 777 / `public` 36 とノイズが 9 割以上を占めた．UI の Explore で `sample_postgres` サービスを開くとこの 816 件に埋もれてサンプルデータが見つけにくいという問題が実際に見つかった（検証方法の節を参照）．
+  - `openmetadata/configs/ingestion/postgres_metadata.yaml` と `postgres_lineage.yaml` の両方の `sourceConfig.config` に `schemaFilterPattern.includes: ["^public$"]` を追加して解消した．修正後，`GET /api/v1/databaseSchemas?database=sample_postgres.sampledb&limit=100` は `public` の 1 件のみを返し，`information_schema` は含まれない．`GET /api/v1/tables?databaseSchema=sample_postgres.sampledb.public&limit=100` の `paging.total` は 5 件で，内訳は `customers` / `orders` / `order_items`（Regular）と `order_details` / `customer_order_summary`（View）．
+  - `sample_postgres` サービス配下の総エンティティは修正前 816 → 修正後 **38**（検索 API の `service.displayName.keyword` 集計）に減った．集計軸を `entityType` 側で足し上げると `table` 5 + `tableColumn` 31 + `database` 1 + `databaseSchema` 1 = 38 で，これに `databaseService` 自身の 1 件を加えると 39 になる．**38 と 39 のどちらが「正しい」件数というより，集計軸（`service.displayName` 配下か，`databaseService` 自身も含めるか）で 1 件ずれる**という点に注意．
+- DataHub の postgres source は設定なしでも `public` の 5 データセット（Table 3 / View 2）のみを取り込み，`information_schema` 等のシステムスキーマは既定で除外された．
+- 評価としては，追加設定なしでシステムスキーマのノイズが混入しない DataHub の既定挙動の方が，このラボのような「まず動かして中身を見る」用途では親切だった．ただし一方向に優劣を決めつけるべきではない．OpenMetadata は既定で何も隠さないため，取り込み対象がフィルタなしでそのまま見え，本来取り込みたいものが漏れているという種類の取りこぼしには気づきやすい．DataHub は既定で除外する分セットアップは楽だが，「何が除外されているか」を利用者側が意識しにくいという裏返しの側面がある．今回はシステムスキーマの除外が「望ましい既定」だったが，逆に除外してほしくない対象まで既定で弾かれるケースもありうるため，DataHub 側でも `schema_pattern` 等のフィルタ設定を都度確認する必要がある点は変わらない．
 
 **OpenMetadata**
 - 検索 API（`/api/v1/search/query?q=customers&index=table_search_index`）で 4 件ヒット．
