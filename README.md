@@ -16,18 +16,28 @@
 
 ## ディレクトリ構成
 
+ツールごとにトップ階層を分け，compose 定義・設定・スクリプトをその配下にまとめる．
+検証用のサンプルデータは両ツールで共有するためトップ階層に置く．
+
 ```
 data-catalog-lab/
 ├── README.md
-├── compose/
-│   ├── openmetadata/   # OpenMetadata 用の Podman Compose 定義
-│   └── datahub/        # DataHub 用の Podman Compose 定義
-├── configs/            # 各ツールの設定ファイル
-├── scripts/            # 起動・停止・データ投入などの補助スクリプト
-├── examples/           # 検証用のサンプルデータ・メタデータ定義
-└── docs/
-    └── comparison.md   # OpenMetadata と DataHub の比較結果
+├── openmetadata/           # OpenMetadata 一式
+│   ├── compose.upstream.yml    # 公式配布の compose（バージョン固定）
+│   ├── compose.override.yml    # 本リポジトリ向けの上書き
+│   ├── Containerfile.ingestion # インジェスト用の拡張イメージ
+│   ├── configs/                # 設定ファイル・インジェスト定義
+│   └── scripts/                # up / down / logs / status / ingest
+├── datahub/                # DataHub 一式（構成は openmetadata/ と同じ）
+├── shared/
+│   └── scripts/            # 事前チェック・compose 取得などの共通スクリプト
+├── examples/               # 検証用のサンプルデータ・メタデータ定義（両ツール共通）
+├── docs/
+│   └── comparison.md       # OpenMetadata と DataHub の比較結果
+└── plans/                  # 実装計画
 ```
+
+スタックの起動は compose が担い，Containerfile は公式イメージを `FROM` する拡張レイヤ（インジェスト用）に専念させる．
 
 ## 前提環境
 
@@ -39,18 +49,29 @@ data-catalog-lab/
 ### OpenMetadata を起動する
 
 ```sh
-cd compose/openmetadata
-podman-compose up -d
+./openmetadata/scripts/up.sh
 ```
+
+起動後 http://localhost:8585 を開く．
 
 ### DataHub を起動する
 
 ```sh
-cd compose/datahub
-podman-compose up -d
+./datahub/scripts/up.sh
 ```
 
-停止する場合は各ディレクトリで `podman-compose down` を実行する．
+起動後 http://localhost:9002 を開く（初期ユーザ `datahub` / `datahub`）．
+
+### 停止する
+
+```sh
+./openmetadata/scripts/down.sh
+./datahub/scripts/down.sh
+```
+
+ボリュームごと消す場合は `--purge` を付ける．
+
+> 両ツールはポート（8080 / 9200 / 3306）とメモリを取り合うため，同時には起動しない．
 
 ## 比較検証
 

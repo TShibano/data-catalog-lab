@@ -1,12 +1,13 @@
 # 実装計画: OpenMetadata / DataHub の Podman 環境構築
 
 作成日: 2026-09-05
-対象: `README.md` のディレクトリ構成に沿った Containerfile・Compose 定義・補助スクリプトの整備
+最終更新: 2026-09-05（ディレクトリ構成をツール優先に変更）
+対象: Containerfile・Compose 定義・補助スクリプトの整備
 
 ## 1. 現状と調査結果
 
 ### リポジトリ
-- `README.md` と `CLAUDE.md` のみ．`compose/` `configs/` `scripts/` `examples/` `docs/` `plans/` はいずれも未作成．
+- `README.md` `CLAUDE.md` `plans/` のみ．実装用のディレクトリはいずれも未作成．
 
 ### ローカル環境（実測・2026-09-05 更新後）
 | 項目 | 実測値 | 判定 |
@@ -33,53 +34,93 @@
 ### 2.1 Containerfile と Compose の役割分担
 両ツールとも「複数サービスから成るスタック」であり，公式イメージをゼロから作り直す意味はない．そこで役割を分ける．
 
-- **Compose 定義**（`compose/<tool>/`）: 公式の compose ファイルをバージョン固定で取り込み，本リポジトリ向けに最小限の上書き（ボリューム名，ポート，メモリ制限）を行う．スタックの起動はこちらが担う．
-- **Containerfile**: 公式イメージを `FROM` する薄い拡張レイヤとして，**インジェスト作業用のイメージ**を各ツール 1 つずつ用意する．検証用のレシピ・サンプルデータ・追加コネクタを同梱したいので，ここは自前ビルドの価値がある．
-  - `compose/openmetadata/Containerfile.ingestion`: `FROM openmetadata/ingestion:2.0.1`．追加コネクタ（postgres / mysql / dbt など）と `examples/` の投入用定義を配置．
-  - `compose/datahub/Containerfile.ingestion`: `FROM python:3.11-slim` + `pip install 'acryl-datahub[…]'`．`configs/datahub/recipes/*.yml` を同梱して `datahub ingest -c` を実行する．
+- **Compose 定義**: 公式の compose ファイルをバージョン固定で取り込み，本リポジトリ向けの上書き（ボリューム名，ポート，メモリ制限）を別ファイルで重ねる．**スタックの起動はこちらが担う**．
+- **Containerfile**: 公式イメージを `FROM` する薄い拡張レイヤとして，**インジェスト作業用のイメージ**を各ツール 1 つずつ用意する．検証用のレシピや追加コネクタを同梱したいので，ここは自前ビルドの価値がある．
+  - `openmetadata/Containerfile.ingestion`: `FROM openmetadata/ingestion:2.0.1`．追加コネクタ（postgres / mysql / dbt など）と投入用定義を配置．
+  - `datahub/Containerfile.ingestion`: `FROM python:3.11-slim` + `pip install 'acryl-datahub[…]'`．recipe を同梱して `datahub ingest -c` を実行する．
 
-> 補足: 「Containerfile だけでスタック全体を立てる」構成は，DataHub の 14 コンテナ・OpenMetadata の 4 コンテナを手書きの `podman run` で繋ぐことになり保守できない．README の Compose 前提を維持し，Containerfile は上記の用途に限定する．
+> 補足: 「Containerfile だけでスタック全体を立てる」構成は，DataHub の 14 コンテナ・OpenMetadata の 4 コンテナを手書きの `podman run` で繋ぐことになり保守できない．Compose 前提を維持し，Containerfile は拡張用途に限定する．これは他のツールのコンテナ実装でも一般的なやり方．
 
-### 2.2 スクリプトの方針
-- `podman-compose` の有無・podman machine の起動状態・メモリ設定を**起動前にチェックして落とす**（起動途中で OOM するのを防ぐ）．
-- ツール別のサブディレクトリに分け（`CLAUDE.md` の規約），共通処理は `scripts/lib/common.sh` に寄せる．
-- 公式 compose ファイルの取得はスクリプト化してバージョンを 1 箇所（`scripts/lib/versions.env`）で管理する．
+### 2.2 ディレクトリ構成の方針: 関心優先 → **ツール優先**
+
+当初の `README.md` は関心優先（`compose/<tool>/`，`configs/<tool>/`，`scripts/<tool>/`）だったが，**ツール優先**（`<tool>/compose.yml`，`<tool>/configs/`，`<tool>/scripts/`）に変更する．
+
+#### 決め手: Containerfile のビルドコンテキスト
+Containerfile は**ビルドコンテキストの外を `COPY` できない**．関心優先のままだと `compose/openmetadata/Containerfile.ingestion` から `configs/openmetadata/` を取り込むために，compose 側でこう書くしかない．
+
+```yaml
+build:
+  context: ../..                                        # リポジトリルート全体
+  containerfile: compose/openmetadata/Containerfile.ingestion
+```
+
+ビルドコンテキストがリポジトリ全体に膨らみ，`examples/` のサンプルデータも `docs/` も `.jj/` も毎回転送される．`.containerignore` での除外が必須になる．`env_file` も `../../configs/openmetadata/openmetadata.env` と 2 段上に登る．
+
+ツール優先なら関連ファイルが同じ subtree に収まり，こう書ける．
+
+```yaml
+build:
+  context: .                      # openmetadata/ 配下だけ
+  containerfile: Containerfile.ingestion
+env_file: ./configs/openmetadata.env
+```
+
+`COPY configs/ /opt/ingestion/configs/` がそのまま通り，コンテキストも小さい．
+
+#### 副次的な理由: 変更の軸がツールだから
+本リポジトリの論理的な作業単位は `CLAUDE.md` にある通り「OpenMetadata のスタックを追加」「DataHub のスタックを追加」．ツール優先なら **1 つの `jj` change が 1 つのディレクトリ subtree に収まる**．関心優先だと 1 つの change が `compose/` `configs/` `scripts/` の 3 箇所に散る．ツールを 1 つ増やす・捨てる操作もディレクトリ 1 つで済む．
+
+#### 関心優先の利点をどう埋めるか
+「2 つの compose を並べて比較したい」は関心優先の利点だが，`diff -r openmetadata/ datahub/` で足りる．ディレクトリ構造で担保する必要はない．
+
+#### ツール配下に寄せないもの
+`examples/` は**両ツールに同じデータを取り込んで比較する**のが目的なので共有に置く．`docs/` `plans/` も同様．スクリプトの共通部分は `shared/scripts/` に置く．
+
+#### 見送った案
+`tools/openmetadata/` のように 1 段挟む案もあるが，対象が 2 ツールならルート直下で十分．3 つ以上に増えてルートが騒がしくなったら再検討する．
+
+### 2.3 スクリプトの方針
+- podman machine の起動状態・メモリ・compose provider の有無を**起動前にチェックして落とす**（起動途中で OOM するのを防ぐ）．
+- ツール固有のスクリプトは `<tool>/scripts/`，共通処理は `shared/scripts/common.sh` に寄せる．
+- 公式 compose ファイルの取得はスクリプト化し，バージョンは `shared/scripts/versions.env` の 1 箇所で管理する．
 
 ## 3. 成果物のディレクトリ構成
 
 ```
 data-catalog-lab/
-├── compose/
-│   ├── openmetadata/
-│   │   ├── docker-compose.yml            # 公式 2.0.1 を取得して配置
-│   │   ├── docker-compose.override.yml   # ポート・ボリューム・メモリの上書き
-│   │   └── Containerfile.ingestion
-│   └── datahub/
-│       ├── docker-compose.yml            # 公式 quickstart 1.7.0 を取得して配置
-│       ├── docker-compose.override.yml
-│       └── Containerfile.ingestion
-├── configs/
-│   ├── openmetadata/
-│   │   ├── openmetadata.env              # DB / Elasticsearch / 認証まわりの環境変数
-│   │   └── ingestion/*.yml               # インジェスト定義
-│   └── datahub/
-│       ├── datahub.env
-│       └── recipes/*.yml                 # DataHub ingestion recipe
-├── scripts/
-│   ├── lib/
-│   │   ├── common.sh                     # 事前チェック・ログ出力・compose ラッパ
-│   │   └── versions.env                  # OM_VERSION / DATAHUB_VERSION の一元管理
-│   ├── fetch-compose.sh                  # 公式 compose を取得（両ツール対応）
-│   ├── openmetadata/{up,down,logs,status,ingest}.sh
-│   └── datahub/{up,down,logs,status,ingest}.sh
+├── openmetadata/
+│   ├── compose.upstream.yml          # 公式 2.0.1 を取得してそのままコミット
+│   ├── compose.override.yml          # ポート・ボリューム・メモリの上書き
+│   ├── Containerfile.ingestion       # FROM openmetadata/ingestion:2.0.1
+│   ├── configs/
+│   │   ├── openmetadata.env          # DB / Elasticsearch / 認証まわりの環境変数
+│   │   └── ingestion/*.yml           # インジェスト定義
+│   └── scripts/{up,down,logs,status,ingest}.sh
+├── datahub/
+│   ├── compose.upstream.yml          # 公式 quickstart 1.7.0 を取得してそのままコミット
+│   ├── compose.override.yml
+│   ├── Containerfile.ingestion       # FROM python:3.11-slim + acryl-datahub
+│   ├── configs/
+│   │   ├── datahub.env
+│   │   └── recipes/*.yml             # DataHub ingestion recipe
+│   └── scripts/{up,down,logs,status,ingest}.sh
+├── shared/
+│   └── scripts/
+│       ├── common.sh                 # 事前チェック・ログ出力・compose ラッパ
+│       ├── versions.env              # OM_VERSION / DATAHUB_VERSION の一元管理
+│       └── fetch-compose.sh          # 公式 compose を取得（両ツール対応）
 ├── examples/
-│   ├── sample-data/                      # 検証用の CSV / DDL
-│   └── postgres/                         # インジェスト対象のサンプル DB（compose 定義含む）
+│   ├── sample-data/                  # 検証用の CSV / DDL（両ツール共通）
+│   └── postgres/                     # インジェスト対象のサンプル DB（compose 定義含む）
 ├── docs/
 │   └── comparison.md
-└── plans/
-    └── 001-container-setup.md            # 本ファイル
+├── plans/
+│   └── 001-container-setup.md        # 本ファイル
+├── README.md
+└── CLAUDE.md
 ```
+
+`compose.upstream.yml` は公式配布物をそのまま置き，本リポジトリの都合は `compose.override.yml` にだけ書く．こうすると公式のバージョンアップ時に upstream 側を差し替えるだけで済み，差分も追いやすい．
 
 ## 4. 実装ステップ（jj の論理単位ごと）
 
@@ -88,32 +129,32 @@ data-catalog-lab/
 | # | change | 内容 | 完了条件 |
 | --- | --- | --- | --- |
 | 0 | `docs: 実装計画を追加` | 本ファイル | — |
-| 1 | `chore: 共通スクリプト基盤を追加` | `scripts/lib/common.sh`，`scripts/lib/versions.env`，`scripts/fetch-compose.sh`，`.gitignore` | `bash -n` が通る．`fetch-compose.sh` で両ツールの compose を取得できる |
-| 2 | `feat: OpenMetadata の compose スタックを追加` | `compose/openmetadata/**`，`configs/openmetadata/**`，`scripts/openmetadata/*.sh` | `up.sh` 後に `http://localhost:8585` が 200 を返す |
-| 3 | `feat: DataHub の compose スタックを追加` | `compose/datahub/**`，`configs/datahub/**`，`scripts/datahub/*.sh` | `up.sh` 後に `http://localhost:9002` が 200 を返す |
+| 1 | `chore: 共通スクリプト基盤を追加` | `shared/scripts/**`，`.gitignore` | `bash -n` が通る．`fetch-compose.sh` で両ツールの compose を取得できる |
+| 2 | `feat: OpenMetadata のスタックを追加` | `openmetadata/**` | `up.sh` 後に `http://localhost:8585` が 200 を返す |
+| 3 | `feat: DataHub のスタックを追加` | `datahub/**` | `up.sh` 後に `http://localhost:9002` が 200 を返す |
 | 4 | `feat: 検証用サンプルデータを追加` | `examples/**`，両ツールの `ingest.sh` とインジェスト定義 | 同一のサンプル DB を両ツールに取り込み，UI で検索・リネージを確認できる |
 | 5 | `docs: 比較結果をまとめる` | `docs/comparison.md`，`README.md` の追記 | 観点表が埋まっている |
 
 ## 5. 主要ファイルの設計
 
-### `scripts/lib/common.sh`
+### `shared/scripts/common.sh`
 - `set -euo pipefail` 前提のユーティリティ．
 - `require_podman()`: `podman` の存在確認．
 - `ensure_machine()`: `podman machine list` を見て停止中なら起動，メモリが要求値未満なら**エラーで停止**し，再作成コマンドを案内する（自動で `podman machine rm` はしない）．
-- `compose_cmd()`: `podman-compose` → `podman compose` の順に解決．どちらも無ければインストール手順を出して終了．
+- `compose_cmd()`: `podman compose` → `podman-compose` の順に解決．どちらも無ければインストール手順を出して終了．
 - `log_info` / `log_error`．
 
-### `scripts/<tool>/up.sh`
-1. `common.sh` を読み込み事前チェック．
-2. compose ファイルが未取得なら `fetch-compose.sh` を呼ぶ．
-3. `compose_cmd -f docker-compose.yml -f docker-compose.override.yml up -d`．
+### `<tool>/scripts/up.sh`
+1. `shared/scripts/common.sh` を読み込み事前チェック．
+2. `compose.upstream.yml` が未取得なら `fetch-compose.sh` を呼ぶ．
+3. `compose_cmd -f compose.upstream.yml -f compose.override.yml up -d`．
 4. ヘルスチェック（UI ポートへの `curl` をリトライ）して URL を表示．
 
-### `scripts/<tool>/down.sh`
+### `<tool>/scripts/down.sh`
 - `down` のみ実行．`-v`（ボリューム削除）は `--purge` フラグを明示したときだけ有効にする．
 
-### `compose/<tool>/Containerfile.ingestion`
-- 前述のとおり公式イメージ／`python:3.11-slim` を土台にした薄い拡張．`configs/<tool>/` 配下をコピーし，`ENTRYPOINT` はインジェストコマンドに寄せる．
+### `<tool>/Containerfile.ingestion`
+- 公式イメージ／`python:3.11-slim` を土台にした薄い拡張．ビルドコンテキストは `<tool>/` なので `COPY configs/ …` がそのまま書ける．`ENTRYPOINT` はインジェストコマンドに寄せる．
 
 ## 6. リスクと未決事項
 
@@ -121,7 +162,7 @@ data-catalog-lab/
    ただし **disk 22GiB（空き 20GiB）** は，DataHub 単体で 13GB を要求するため両ツールのイメージを同居させると逼迫する．
    対応: ツールを切り替える際に `podman image prune` を挟む．足りなければ `podman machine set --disk-size` で拡張．
 2. ~~podman-compose 未インストール~~ **解消済み**（Homebrew で 1.6.0）．
-   `podman compose` は external provider としてこれを呼ぶ構成になった．スクリプトの `compose_cmd()` は `podman compose` を第一候補とする．
+   `podman compose` は external provider としてこれを呼ぶ構成になった．
 3. **DataHub quickstart compose と podman-compose の互換性**
    `--profile` オプション自体は podman-compose 1.6.0 に存在する（`--help` で確認済み）．
    残る懸念は `depends_on` の `condition: service_healthy` など Compose Spec の細部で，podman-compose は Docker Compose の別実装のため差異が出やすい．ステップ 3 の冒頭で検証し，詰まった場合の代替は次の順で試す．
@@ -130,17 +171,13 @@ data-catalog-lab/
    (c) 旧形式の quickstart ファイルを使う
 4. **ポート衝突**
    OpenMetadata（8080 Airflow / 9200 ES / 3306 MySQL）と DataHub（8080 GMS / 9200 OpenSearch / 3306 MySQL）が重複する．
-   方針: **既定では同時起動しない**．同時比較したい場合に備え，`docker-compose.override.yml` でホスト側ポートをずらせるようにしておく．
+   方針: **既定では同時起動しない**．同時比較したい場合に備え，`compose.override.yml` でホスト側ポートをずらせるようにしておく．
 5. **リソース同時消費**
    両スタック合計で 14GB 超のメモリを要求するため，同時起動は現実的でない．比較は「片方ずつ起動 → 観点を記録」の手順とする．
 6. **バージョン固定**
    OpenMetadata 2.0.1 / DataHub 1.7.0 を `versions.env` に固定．`latest` は使わない．
 
-## 7. 未確認事項
-
-- Containerfile の位置づけを「インジェスト用の薄い拡張イメージ」とする方針（2.1）でよいか．
-
-## 8. 補足: 環境まわりの小ネタ
+## 7. 補足: 環境まわりの小ネタ
 
 - `podman compose` は実行のたびに `>>>> Executing external compose provider ... <<<<` を出す．
   `~/.config/containers/containers.conf` に次を書けば黙る．
