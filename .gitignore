@@ -1,0 +1,16 @@
+# ローカル専用の秘密が入りうる上書きファイル．configs/*.env はコミット対象なので対象外．
+.env
+
+# fetch-compose.sh のダウンロード失敗時に残りうる一時ファイル
+.compose.upstream.*
+
+# OS / エディタ由来
+.DS_Store
+*.swp
+*.swo
+
+# examples 配下で生成されるデータ（後続ステップで使用）
+examples/**/data/
+
+# OpenMetadata upstream compose が作る mysql の bind mount
+openmetadata/docker-volume/
