@@ -153,6 +153,37 @@ data-catalog-lab/
 ### `<tool>/scripts/down.sh`
 - `down` のみ実行．`-v`（ボリューム削除）は `--purge` フラグを明示したときだけ有効にする．
 
+### `<tool>/compose.override.yml`
+
+compose の複数ファイル指定は「マージ」であって「後勝ち」ではない．公式仕様では次のように振る舞う．
+
+| 属性 | マージ規則 |
+| --- | --- |
+| スカラー（`image` など） | 後のファイルで置換 |
+| マッピング（`environment` など） | キー単位でマージ |
+| シーケンス（一般） | **追記**（後のファイルの値を末尾に足す） |
+| `ports` | `{ip, target, published, protocol}` の複合キーで一意判定．キーが違えば**追記** |
+| `command` | 例外的に全体を置換 |
+| `volumes` | target パスをキーに一意判定 |
+
+つまり `ports` は，ホスト側ポートを変えると複合キーが変わるため**別エントリとして追記され，upstream 側の bind も残ってしまう**．
+明示的に置き換えるには `!override` タグを使う．
+
+```yaml
+services:
+  openmetadata-server:
+    ports: !override
+      - "18585:8585"
+```
+
+**検証結果（2026-09-05，podman-compose 1.6.0）**: `podman compose -f base.yml -f over.yml config` で確認した．
+
+- タグなし → `8080:80` と `9090:80` の**両方**が出力される（仕様どおり追記）
+- `ports: !override` → `9090:80` **のみ**が出力される
+
+**podman-compose 1.6.0 は `!override` タグに対応している**ため，この方針で問題ない．
+なお `!reset` タグは未検証．必要になった時点で同じ手順で確認する．
+
 ### `<tool>/Containerfile.ingestion`
 - 公式イメージ／`python:3.11-slim` を土台にした薄い拡張．ビルドコンテキストは `<tool>/` なので `COPY configs/ …` がそのまま書ける．`ENTRYPOINT` はインジェストコマンドに寄せる．
 
@@ -172,6 +203,7 @@ data-catalog-lab/
 4. **ポート衝突**
    OpenMetadata（8080 Airflow / 9200 ES / 3306 MySQL）と DataHub（8080 GMS / 9200 OpenSearch / 3306 MySQL）が重複する．
    方針: **既定では同時起動しない**．同時比較したい場合に備え，`compose.override.yml` でホスト側ポートをずらせるようにしておく．
+   実装上の注意は 5.3 を参照（`ports` は素直に上書きできない）．
 5. **リソース同時消費**
    両スタック合計で 14GB 超のメモリを要求するため，同時起動は現実的でない．比較は「片方ずつ起動 → 観点を記録」の手順とする．
 6. **バージョン固定**
