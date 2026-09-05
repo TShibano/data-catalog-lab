@@ -26,6 +26,16 @@ source:
       includeTables: true
       includeViews: true
       includeTags: true
+      # OpenMetadata は DataHub と違い，システムスキーマ（information_schema 等）を
+      # 既定では除外しない．そのため public 以外を明示的に絞り込む必要がある．
+      #
+      # excludes で information_schema を弾く書き方もあるが，あえて includes で
+      # public のみを明示する．検証用ラボとして対象スキーマは固定されており，
+      # 将来 upstream 側が別のシステムスキーマを返すようになっても
+      # 影響を受けないため．
+      schemaFilterPattern:
+        includes:
+          - "^public$"
       # ビューの定義 SQL（CREATE VIEW ... AS SELECT ...）を schemaDefinition として
       # 取り込む処理自体は includeViews が true であれば常に行われる
       # （実装: common_db_source.py の get_schema_definition）．

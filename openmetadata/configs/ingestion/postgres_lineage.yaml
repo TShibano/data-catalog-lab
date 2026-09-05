@@ -41,6 +41,16 @@ source:
       # 拡張も有効化していないため）．
       processQueryLineage: false
       processStoredProcedureLineage: false
+      # OpenMetadata は DataHub と違い，システムスキーマ（information_schema 等）を
+      # 既定では除外しない．メタデータ取り込み側（postgres_metadata.yaml）と
+      # 対象範囲を揃えるため，こちらも public のみに絞り込む．
+      #
+      # excludes ではなく includes を使うのは postgres_metadata.yaml と同じ理由
+      # （検証用ラボとして対象が固定されており，upstream が将来別のシステム
+      # スキーマを返しても影響を受けないため）．
+      schemaFilterPattern:
+        includes:
+          - "^public$"
 
 sink:
   type: metadata-rest

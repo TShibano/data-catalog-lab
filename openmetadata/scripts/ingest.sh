@@ -20,6 +20,15 @@ source "${SCRIPT_DIR}/lib.sh"
 IMAGE_TAG="om-ingestion:local"
 OM_BASE_URL="http://localhost:${OM_UI_PORT}"
 
+# --- 期待値定数（examples/sample-data/01_schema.sql の内容に対応） ---
+# public スキーマのテーブル総数．
+# テーブル: customers / orders / order_items（3）
+# ビュー  : order_details / customer_order_summary（2）
+EXPECTED_PUBLIC_TABLES=5
+# customer_order_summary は customers / orders / order_items の 3 テーブルを
+# 直接 JOIN・集約したビュー（01_schema.sql 参照）．上流エッジは 3 件になるはず．
+EXPECTED_UPSTREAM_EDGES=3
+
 require_podman
 
 # --- 0. 前提の到達確認 ---
@@ -110,7 +119,34 @@ if ! podman run --rm \
 fi
 
 # --- 6. API で結果を検証する ---
+
+# schemaFilterPattern（public 限定）が効いているかを件数一致で確認する．
+# 以前は「1 件以上ヒットすれば OK」という緩い判定だったため，
+# information_schema まで丸ごと取り込まれていても検知できなかった．
+log_info "public スキーマのテーブル総数を確認する．"
+PUBLIC_TABLES_RESULT="$(curl -fsS "${OM_BASE_URL}/api/v1/tables?databaseSchema=sample_postgres.sampledb.public&limit=100" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}")"
+PUBLIC_TABLES_TOTAL="$(printf '%s' "${PUBLIC_TABLES_RESULT}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["paging"]["total"])')"
+PUBLIC_TABLE_NAMES="$(printf '%s' "${PUBLIC_TABLES_RESULT}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(", ".join(sorted(t["name"] for t in d["data"])))')"
+
+if [ "${PUBLIC_TABLES_TOTAL}" -ne "${EXPECTED_PUBLIC_TABLES}" ]; then
+  die "public スキーマのテーブル総数が期待値と一致しない（期待: ${EXPECTED_PUBLIC_TABLES}，実測: ${PUBLIC_TABLES_TOTAL}）．schemaFilterPattern の設定を確認すること．"
+fi
+log_info "public スキーマのテーブル総数は期待どおり ${PUBLIC_TABLES_TOTAL} 件（${PUBLIC_TABLE_NAMES}）．"
+
+# sample_postgres サービス（sample_postgres.sampledb データベース）配下に
+# information_schema のスキーマが取り込まれていないことを確認する．
+log_info "sample_postgres 配下に information_schema が存在しないことを確認する．"
+DATABASE_SCHEMAS_RESULT="$(curl -fsS "${OM_BASE_URL}/api/v1/databaseSchemas?database=sample_postgres.sampledb&limit=100" \
+  -H "Authorization: Bearer ${ADMIN_TOKEN}")"
+if printf '%s' "${DATABASE_SCHEMAS_RESULT}" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(s["name"] == "information_schema" for s in d["data"]) else 1)'; then
+  die "sample_postgres 配下に information_schema が残っている．schemaFilterPattern の設定を確認すること．"
+fi
+log_info "sample_postgres 配下に information_schema は存在しない．"
+
 # 検索インデックスへの反映がわずかに遅れることがあるため軽くリトライする．
+# ここは「customers がヒットするか」という存在確認のみで，件数自体は
+# トークナイズやスコアリングの都合で環境依存に揺れうるため厳密一致はさせない．
 log_info "検索 API で customers テーブルがヒットするか確認する．"
 SEARCH_OK=0
 for _ in 1 2 3 4 5; do
@@ -124,8 +160,13 @@ for _ in 1 2 3 4 5; do
   sleep 3
 done
 
+# json.tool の出力を先に変数へ確定してから head で切り詰める．
+# python3 -m json.tool を head に直結すると，head が先に読み終えてパイプを
+# 閉じた際に python3 が SIGPIPE を受けて非 0 終了し，pipefail 経由で
+# スクリプト全体が異常終了することがある（実機で確認済み）．
+SEARCH_RESULT_PRETTY="$(printf '%s' "${SEARCH_RESULT}" | python3 -m json.tool)"
 echo "=== 検索 API: q=customers ==="
-printf '%s\n' "${SEARCH_RESULT}" | python3 -m json.tool | head -60
+printf '%s\n' "${SEARCH_RESULT_PRETTY}" | head -60 || true
 echo
 
 if [ "${SEARCH_OK}" -ne 1 ]; then
@@ -143,9 +184,9 @@ printf '%s\n' "${LINEAGE_RESULT}" | python3 -m json.tool
 echo
 
 UPSTREAM_COUNT="$(printf '%s' "${LINEAGE_RESULT}" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(len(d.get("upstreamEdges", [])))')"
-if [ "${UPSTREAM_COUNT}" -lt 1 ]; then
-  die "customer_order_summary の上流リネージが 1 件も取れなかった．"
+if [ "${UPSTREAM_COUNT}" -ne "${EXPECTED_UPSTREAM_EDGES}" ]; then
+  die "customer_order_summary の上流エッジ数が期待値と一致しない（期待: ${EXPECTED_UPSTREAM_EDGES}，実測: ${UPSTREAM_COUNT}）．"
 fi
-log_info "customer_order_summary の上流に ${UPSTREAM_COUNT} 件のエッジを確認した．"
+log_info "customer_order_summary の上流に期待どおり ${UPSTREAM_COUNT} 件のエッジを確認した．"
 
 log_info "インジェストと検証が完了した．"
