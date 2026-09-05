@@ -1,0 +1,45 @@
+# サンプル DB (examples/postgres) のメタデータインジェスト定義．
+# テーブル・ビューのスキーマ／コメントを取り込む．
+#
+# 接続先は examples/postgres/compose.yml のサンプル DB．
+# OpenMetadata のスタックとサンプル DB は別 compose プロジェクト（別ネットワーク）
+# のため，host.containers.internal 経由でホストの公開ポート（5432）を参照する．
+#
+# jwtToken は ingest.sh がビルド時ではなく実行時に，このファイルをコピーした
+# 一時ファイルへ sed で埋め込む（イメージにも git にも平文トークンを残さない）．
+# プレースホルダ自体は秘密ではない．
+source:
+  type: postgres
+  serviceName: sample_postgres
+  serviceConnection:
+    config:
+      type: Postgres
+      username: sample_user
+      authType:
+        password: sample_password
+      hostPort: host.containers.internal:5432
+      database: sampledb
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      markDeletedTables: true
+      includeTables: true
+      includeViews: true
+      includeTags: true
+      # ビューの定義 SQL（CREATE VIEW ... AS SELECT ...）を schemaDefinition として
+      # 取り込む処理自体は includeViews が true であれば常に行われる
+      # （実装: common_db_source.py の get_schema_definition）．
+      # これを元に table -> view のリネージを生成するのは，このファイルとは別の
+      # postgres_lineage.yaml（type: DatabaseLineage, processViewLineage: true）
+      # 側の役割．
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  openMetadataServerConfig:
+    hostPort: http://host.containers.internal:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: "REPLACE_WITH_INGESTION_BOT_JWT"

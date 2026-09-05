@@ -1,0 +1,35 @@
+# サンプル DB (examples/postgres) を DataHub へインジェストする recipe．
+#
+# 接続先は examples/postgres/compose.yml のサンプル DB．
+# DataHub のスタックとサンプル DB は別 compose プロジェクト（別ネットワーク）
+# のため，host.containers.internal 経由でホストの公開ポート（5432）を参照する．
+# sink の GMS も同様に host.containers.internal 経由でホストの公開ポートを参照する．
+#
+# GMS のホスト公開ポートは既定 8080 だが，OpenMetadata と同時起動するために
+# DATAHUB_ALT_PORTS=1 を付けて起動した場合は compose.altports.yml により
+# 28080 にずれる（scripts/lib.sh の dh_compose_files() / DH_GMS_PORT を参照）．
+# このファイルは起動方法に関わらず共通でコミットする一つの recipe にしたいため，
+# ポート番号は決め打ちにせず REPLACE_WITH_GMS_PORT というプレースホルダを置き，
+# ingest.sh が実行時に DH_GMS_PORT の値へ sed で置き換えた一時コピーを
+# コンテナへマウントして使う（OpenMetadata 側で jwtToken に使ったのと同じ方式）．
+# プレースホルダ自体は秘密ではない．
+source:
+  type: postgres
+  config:
+    host_port: host.containers.internal:5432
+    database: sampledb
+    username: sample_user
+    password: sample_password
+    include_tables: true
+    include_views: true
+    # ビューの定義 SQL からテーブル -> ビューのリネージを取る設定．
+    # acryl-datahub の PostgresConfig では既定値も true だが，本タスクの要件
+    # （ビューのリネージを有効にする）を明示するためあえて書く．
+    include_view_lineage: true
+    # カラムレベルのリネージも合わせて有効にする（既定 true）．
+    include_view_column_lineage: true
+
+sink:
+  type: datahub-rest
+  config:
+    server: http://host.containers.internal:REPLACE_WITH_GMS_PORT

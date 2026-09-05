@@ -1,0 +1,32 @@
+# インジェスト対象のサンプル DB．OpenMetadata / DataHub のどちらのスタックとも
+# 別 compose プロジェクト（＝別ネットワーク）として独立に起動する．
+# 両ツールからは，ネットワークを繋ぐ小細工をせず host.containers.internal 経由で
+# ホストの公開ポート（5432）を参照させる方針．
+#
+# DB 名・ユーザ・パスワードは検証用の固定値であり秘密ではない
+# （ローカル検証専用で，外部に公開しない前提）．
+
+volumes:
+  sample-pg-data:
+
+services:
+  postgres:
+    container_name: sample_postgres
+    image: docker.io/library/postgres:16-alpine
+    restart: "no"
+    environment:
+      POSTGRES_DB: sampledb
+      POSTGRES_USER: sample_user
+      POSTGRES_PASSWORD: sample_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - sample-pg-data:/var/lib/postgresql/data
+      # ファイル名順（01_schema.sql -> 02_data.sql）に実行される．
+      - ../sample-data:/docker-entrypoint-initdb.d:ro
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sample_user -d sampledb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

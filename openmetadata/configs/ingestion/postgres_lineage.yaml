@@ -1,0 +1,54 @@
+# サンプル DB (examples/postgres) のリネージインジェスト定義．
+# postgres_metadata.yaml で取り込んだビューの schemaDefinition（view definition SQL）
+# を解析し，table -> view のリネージを生成する．
+#
+# OpenMetadata は「メタデータ取り込み」と「リネージ取り込み」を別パイプライン
+# （sourceConfig.config.type が DatabaseMetadata / DatabaseLineage）として扱う．
+# 先に postgres_metadata.yaml を実行してテーブル・ビューを登録してから，
+# このファイルを実行すること．
+#
+# jwtToken の扱いは postgres_metadata.yaml と同じ（ingest.sh が実行時に埋め込む）．
+#
+# source.type は "postgres" ではなく "postgres-lineage" にすること．
+# OpenMetadata は service_spec.py の DefaultDatabaseSpec で
+# metadata_source_class / lineage_source_class / usage_source_class を
+# コネクタごとに別クラスとして登録しており，"<connector>-lineage" という
+# type サフィックスで lineage_source_class（Postgres の場合 PostgresLineageSource）
+# を選択する仕組みになっている．"postgres" のままだと常に metadata 用の
+# トポロジ（PostgresSource）が使われ，DatabaseServiceQueryLineagePipeline には
+# markDeletedTables 等のフィールドが無いため AttributeError になる
+# （実機で確認済み．metadata/utils/service_spec/service_spec.py の
+# import_source_class を参照）．
+source:
+  type: postgres-lineage
+  serviceName: sample_postgres
+  serviceConnection:
+    config:
+      type: Postgres
+      username: sample_user
+      authType:
+        password: sample_password
+      hostPort: host.containers.internal:5432
+      database: sampledb
+  sourceConfig:
+    config:
+      type: DatabaseLineage
+      # ビューの定義 SQL からリネージを生成する設定（本タスクの要件）．
+      # OM 2.0.1 の実装では既定値も true だが，意図を明示するため明示的に書く．
+      processViewLineage: true
+      # クエリログ（pg_stat_statements 等）からのリネージはサンプル DB では
+      # 対象外にする（実行したクエリ履歴がないため対象がなく，pg_stat_statements
+      # 拡張も有効化していないため）．
+      processQueryLineage: false
+      processStoredProcedureLineage: false
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  openMetadataServerConfig:
+    hostPort: http://host.containers.internal:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: "REPLACE_WITH_INGESTION_BOT_JWT"
