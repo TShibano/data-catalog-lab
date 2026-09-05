@@ -1,7 +1,7 @@
 # 実装計画: OpenMetadata / DataHub の Podman 環境構築
 
 作成日: 2026-09-05
-最終更新: 2026-09-05（ディレクトリ構成をツール優先に変更）
+最終更新: 2026-09-05（8 章: OpenMetadata のインジェスト範囲の修正計画を追記）
 対象: Containerfile・Compose 定義・補助スクリプトの整備
 
 ## 1. 現状と調査結果
@@ -218,3 +218,97 @@ services:
   compose_warning_logs = false
   ```
 - `~/.docker/cli-plugins/` に Docker Desktop 削除後の壊れた symlink が残っている．実害はないが掃除してよい．
+
+## 8. 追加計画: OpenMetadata のインジェスト範囲をサンプルスキーマに限定する
+
+追記日: 2026-09-05（ステップ 1〜5 完了後，UI で確認して判明）
+
+### 8.1 問題
+
+ステップ 4 で作った `openmetadata/configs/ingestion/postgres_metadata.yaml` は
+スキーマの絞り込みを一切していないため，サンプル DB の `public` だけでなく
+PostgreSQL の `information_schema` まで丸ごと取り込んでいた．
+UI の Explore で `sample_postgres` サービスを開くと 816 件が並び，
+検証対象のサンプルデータが埋もれてしまう．
+
+実測した内訳（`/api/v1/search/query` の `entityType` / `databaseSchema.name` 集計）．
+
+| 区分 | 件数 |
+| --- | --- |
+| `tableColumn` | 728 |
+| `table` | 74（`public` 5 + `information_schema` 69） |
+| `storedProcedure` | 11 |
+| `databaseSchema` / `database` | 3 |
+| 合計 | 816 |
+
+スキーマ別では **`information_schema` 777 / `public` 36** で，
+9 割以上がシステムスキーマのノイズだった．
+
+### 8.2 これは比較の公平性も損なっている
+
+DataHub 側は同じサンプル DB から **5 データセット（Table 3 / View 2）しか作っていない**．
+DataHub の postgres source はシステムスキーマを既定で除外するが，
+OpenMetadata は既定では除外しない，という**ツール間の挙動差**が原因．
+
+現状は両ツールで取り込み範囲が揃っておらず，
+`docs/comparison.md` の「取り込み結果」節は前提が非対称なまま比較している．
+この観点自体が比較材料として価値があるので，
+**挙動差を記録した上で，取り込み範囲を揃える**．
+
+### 8.3 方針
+
+`sourceConfig.config.schemaFilterPattern` で `public` のみを対象にする．
+`DatabaseServiceMetadataPipeline` と `DatabaseServiceQueryLineagePipeline` の
+どちらも `schemaFilterPattern` フィールドを持つことを実機で確認済み
+（`model_fields` を直接確認．`databaseFilterPattern` / `tableFilterPattern` /
+`storedProcedureFilterPattern` も同様に存在する）．
+
+```yaml
+sourceConfig:
+  config:
+    type: DatabaseMetadata
+    schemaFilterPattern:
+      includes:
+        - "^public$"
+```
+
+`excludes` で `information_schema` を弾く書き方もあるが，**`includes` で
+`public` だけを明示する**方を採る．検証用ラボとして対象が固定されており，
+将来 upstream 側が別のシステムスキーマを返すようになっても影響を受けないため．
+
+### 8.4 再インジェストの手順
+
+`markDeletedTables` / `markDeletedSchemas` による論理削除に頼らず，
+**ボリュームごと作り直して素の状態から入れ直す**．
+既存エンティティが残ったままだと，フィルタが効いているのか
+論理削除されただけなのかが検証時に切り分けられないため．
+
+```sh
+./openmetadata/scripts/down.sh --purge
+./openmetadata/scripts/up.sh
+./openmetadata/scripts/ingest.sh
+```
+
+### 8.5 検証を `ingest.sh` に埋める
+
+独立したテストスイートは作らない方針なので，
+`ingest.sh` の検証部分を「1 件以上ヒットすれば OK」から
+**期待する件数の一致確認**に強くする．これで同種の取りこぼしを次から検出できる．
+
+- `public` スキーマのテーブル総数が **5**（テーブル 3 + ビュー 2）であること．
+- `sample_postgres` サービス配下に `information_schema` のスキーマが**存在しない**こと．
+- `customer_order_summary` の上流が **3 件**であること（現状は 1 件以上で通してしまう）．
+
+### 8.6 作業ステップ（jj の論理単位ごと）
+
+| # | change | 内容 | 完了条件 |
+| --- | --- | --- | --- |
+| 6 | `docs: インジェスト範囲の修正計画を追記` | 本節 | — |
+| 7 | `fix: OpenMetadata のインジェスト対象を public スキーマに限定` | `openmetadata/configs/ingestion/*.yaml`，`openmetadata/scripts/ingest.sh` | 再インジェスト後，`public` の 5 件のみが取り込まれ，`information_schema` が存在しない |
+| 8 | `docs: システムスキーマの扱いの差を比較結果に追記` | `docs/comparison.md` | 8.2 の挙動差と，修正後の取り込み件数が反映されている |
+
+### 8.7 DataHub 側について
+
+DataHub の recipe は既定で `public` の 5 データセットのみを取り込めており，
+**現時点で修正は不要**．ただし「既定で除外される」ことに依存している状態なので，
+将来 `include_view_lineage` 以外の設定を触る際は取り込み範囲を再確認すること．
