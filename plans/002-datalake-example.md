@@ -2,7 +2,8 @@
 
 作成日: 2026-09-05
 対象: Issue #1「examples: S3互換オブジェクトストレージ上のparquetファイルをモチーフにしたサンプルデータセットの作成」
-状態: **検討中**．3.1（ストレージ = MinIO）は決定．3.2 は推奨案あり，未確定．
+状態: **検討中**．3.1（ストレージ = MinIO）は決定．
+3.2（リネージの取り方・変換エンジン）は推奨案あり，未確定．
 更新: 2026-09-06
 
 ## 1. 背景
@@ -100,6 +101,28 @@ DataHub 側の `aws_endpoint_url` 相当は**未確認**（`acryl-datahub[s3]` �
 DataHub の互換性判定は一歩踏み込んでおり，**ここは良い比較材料になる**．
 3.5 の「スキーマ進化をシナリオに含めるか」はこれに直結する．
 
+### 2.6 自動リネージが成立する経路（ドキュメント調査・2026-09-06）
+
+2.4 の「自動で埋まるのは SQL があるときだけ」をより正確に言うと，
+**「カタログが読める場所に SQL があるときだけ」**．経路は 3 つしかない．
+
+| 経路 | 仕組み | 備考 |
+| --- | --- | --- |
+| コネクタが接続先の query history / view 定義を読む | Snowflake・BigQuery・Postgres など**稼働中のサービス**に接続してログを舐める | `examples/postgres` のリネージはこれ |
+| dbt の `manifest.json` を読む | 両ツールとも dbt コネクタあり．OpenMetadata は `dbt compile` で `compiled_code` を埋めた manifest を要求する | 変換を SQL モデルとして書く必要がある |
+| オーケストレータのプラグインが実行時に emit する | Dagster: `acryl_datahub_dagster_plugin` / `openmetadata-ingestion[dagster]`．Airflow も両ツール対応 | 変換の実装言語を問わない |
+
+**DuckDB は 1 番目に該当しない．** 埋め込みプロセスなので，スクリプトが終われば
+SQL はどこにも残らず，コネクタが読みに来る先がない．
+つまり **polars から DuckDB に替えてもリネージは自動にならない**（3.2 参照）．
+
+**Airflow 経路には公平性の落とし穴がある（本リポジトリの compose で確認）．**
+`openmetadata/compose.upstream.yml` は `ingestion` サービスとして Airflow を
+同梱している（`AirflowRESTClient`，`AIRFLOW_*` env，DAG 用ボリューム）が，
+`datahub/compose.upstream.yml` に Airflow は含まれない．
+Airflow を使うと OpenMetadata だけ「既にあるものに DAG を置くだけ」になり，
+**連携能力の差ではなくスタック構成の差**が結果に混ざる．
+
 ## 3. 決定事項と未決事項
 
 ### 3.1 オブジェクトストレージ: MinIO（決定・2026-09-06）
@@ -141,6 +164,51 @@ bronze → silver → gold のリネージは**何もしなければ両ツール
 1. **登録の手間** — テーブル辺 / カラム辺 / 変換の自由記述を入れるまでの API 呼び出し数と型定義の重さ．
 2. **UI への出方** — API に入れた `function` / `transformOperation` が実際に画面で読めるか．**入れても表示されないケースがありうるので，ここは実機で見ないと分からない．**
 3. **スキーマ進化** — bronze に列を足したとき，DataHub の Schema History と OpenMetadata の Versions タブでどう見えるか．DataHub の互換性判定が効くかどうか．
+
+#### 3.2.1 変換エンジンの選択: polars を継続（推奨）
+
+変換は **Python + polars のまま**でよい．DuckDB / dbt / Dagster / Airflow への
+乗り換えは，このラボの目的に対して割に合わない．
+
+| 案 | リネージ | 追加で背負うもの |
+| --- | --- | --- |
+| **polars + API 手動登録** | 手動 | なし |
+| DuckDB + API 手動登録 | 手動（2.6 より自動にならない） | 書き慣れた polars を捨てる．**得るものがない** |
+| dbt-duckdb | 自動（manifest） | 変換を SQL に書き直す．dbt の依存と学習コスト |
+| Dagster | 自動（プラグイン）．polars のまま使える | Dagster プロセス．両ツール分のプラグイン設定 |
+| Airflow | 自動 | Airflow 一式．重い．加えて 2.6 の公平性の問題 |
+
+判断の根拠は「**ラボが基盤の技術選定を先に固定してはいけない**」．
+このリポジトリの目的はカタログツールの比較であって，データ基盤の設計ではない．
+データレイクの詳細が未確定で polars でスモールスタートしている現状では，
+ラボもその現実を写した方が，比較結果がそのまま実際の判断材料になる．
+
+Dagster は「polars のまま自動リネージが取れる」点で筋は悪くないので，
+**基盤側で Dagster を採用したときに再検討する**．道は塞がない（下記）．
+
+#### 3.2.2 案 A を採る場合の構成
+
+**ツール中立なリネージ記述を自前で 1 枚持つ．**
+
+```
+examples/datalake/
+├── transform/        # polars の変換．bronze -> silver -> gold
+├── lineage.yml       # 中立な記述: どの列がどの列から，どう作られたか
+└── register/
+    ├── openmetadata.py   # lineage.yml -> OM の lineageDetails
+    └── datahub.py        # lineage.yml -> DataHub の FineGrainedLineage
+```
+
+利点は 3 つ．
+
+1. **比較が綺麗になる** — 同じ入力・2 つのアダプタなので，差分がそのまま
+   リネージ API の手間の差になる（3.2 の観点 1）．
+2. **変換コードにツールの API が混ざらない** — どちらかのツールを捨てても
+   他方が壊れない．
+3. **将来の移行で捨てずに済む** — dbt や Dagster に移っても `lineage.yml` の
+   供給元が変わるだけ．さらに，自動で取れたリネージと手書きの `lineage.yml` を
+   突き合わせれば「**自動検出の取りこぼし**」を測れる．今やる話ではないが，
+   将来の比較材料として道を残せる．
 
 ### 3.3 `examples/` のディレクトリ構成
 
@@ -189,6 +257,8 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 - MinIO / Garage のイメージ存在と arm64 対応．MinIO の更新停止時期．
 - `openmetadata-ingestion[datalake-s3]` と `acryl-datahub[s3]` の依存内容．Spark 非依存であること．
 - OpenMetadata の `AWSCredentials` に `endPointURL` があること．
+- `openmetadata/compose.upstream.yml` が Airflow を同梱し，
+  `datahub/compose.upstream.yml` は同梱しないこと（2.6 の公平性の論点）．
 
 **ドキュメントで確認した（実機未検証）**
 - 両ツールのリネージのデータモデルと，変換内容を書く箱の有無（2.4）．
@@ -196,6 +266,8 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
   DataHub `FineGrainedLineage.transformOperation` / DataJob．
 - 変換内容の自動抽出は SQL パーサ由来であり，parquet では働かないこと（2.4）．
 - 両ツールのスキーマ変更履歴機能（2.5）．DataHub Timeline API の互換性判定．
+- 自動リネージが成立する 3 経路（2.6）．両ツールに dbt / Dagster / Airflow の
+  連携が存在すること．
 
 **未確認（推測で計画を進めない）**
 - DataHub 側の S3 互換エンドポイント指定方法．
@@ -209,12 +281,17 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 - Datalake / S3 コネクタで取り込んだ parquet に対し，スキーマ変更履歴
   （2.5）が実際に記録されるか．再インジェスト時に差分として拾うか．
 - `quay.io/minio/minio` hotfix ビルドの arm64 対応．
+- 両ツールに DuckDB コネクタが存在しないこと（ドキュメント検索では
+  見つからなかったが，「無い」ことの確認はしていない）．
+  ただし 2.6 の通り，仮にあっても埋め込み DB の query history は
+  読めないため結論は変わらない．
 
 ## 5. 次のアクション
 
 1. ~~3.1（ストレージ）の方針を決める~~ → MinIO で決定（2026-09-06）．
 2. 3.2 の推奨案（案 A + スキーマ進化）を採るか決める．**ここが決まらないと
    データセットの設計（3.5）が決まらない．**
+   変換エンジンは polars 継続を推奨（3.2.1），構成は 3.2.2 の形を推奨．
 3. 決まったら 3.3 / 3.4 を確定させ，本ファイルに実装ステップ表（`jj` の
    論理単位ごと）を追記する．
 4. 着手前に，未確認項目のうち次の 3 つは小さく実機検証しておくと手戻りが減る．
