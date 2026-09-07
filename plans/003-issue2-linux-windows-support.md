@@ -2,7 +2,8 @@
 
 作成日: 2026-09-07
 対象: Issue #2「feat: Linux/Windows対応」
-状態: **未着手**．2 章の棚卸しは実測ベース．3.1（対応範囲）・3.4（リソース不足時の扱い）は決定済み．
+状態: **実装中**．4 章のステップ 1〜4 を feat/linux-windows-support で実装した．
+実装時に判明した差異と実測結果は 8 章にまとめている．
 更新: 2026-09-07
 
 ## 1. 背景
@@ -141,6 +142,7 @@ compose 側（`examples/postgres/compose.yml` と DataHub upstream の
   `datahub/compose.override.yml` で同じ target を短縮構文＋`:z` で書き，
   マウント定義を置換する（volumes は target キーでマージされる仕様を利用．
   既存の override が `mem_limit` で使っているのと同じ手口）．
+  → **この方法は使えなかった．8 章の通り `chcon` に変更した．**
 
 #### `host.containers.internal`（#8）
 
@@ -233,7 +235,49 @@ macOS 実機しか無いため，Linux 経路は**代替手段で確認した上
 
 1. ~~3.1（対応範囲）を確定する~~ → Linux ネイティブ + WSL2．Git Bash は対象外（2026-09-07）．
 2. ~~3.4（ネイティブでのメモリ不足の扱い）を確定する~~ → warn で続行（2026-09-07）．
-3. 4 章のステップ 1 から着手する．
-4. 6 章の未確認項目のうち，「短縮構文＋`:z` の override で置換できるか」は
-   ステップ 3 の前提なので，着手前に手元の macOS で `podman compose config` の
-   出力を見て確認しておく（実行はせずマージ結果だけ見れば分かる）．
+3. ~~4 章のステップ 1 から着手する~~ → ステップ 1〜4 を実装（2026-09-07）．
+4. ~~「短縮構文＋`:z` の override で置換できるか」を着手前に確認する~~
+   → 置換できなかった．8 章の通り `chcon` 方式へ変更（2026-09-07）．
+5. 実 Linux 機で 8 章の残り（rootless での `--add-host` 経由の到達，WSL2 の
+   cgroup）を確認する．手元に環境が無いため未実施．
+
+## 8. 実装時に確認したこと（2026-09-07）
+
+6 章の未確認項目のうち，着手時に決着したものを記録する．
+
+**Linux ネイティブ経路（`podman machine ssh` で入る Fedora CoreOS で実測）**
+
+`host_os=linux` / machine 無しと判定 / SELinux `enforcing` を検出して `,Z` を付与 /
+`--add-host=host.containers.internal:host-gateway` を付与 /
+`/proc/meminfo` から 9211MiB / `Store.GraphRoot` の `df` から 39GB /
+`curl`・`python3`・`base64`・`chcon` はいずれも存在．
+メモリ要求を過大にしても warn を出して続行することも確認した（3.4 の通り）．
+
+**DataHub の `${HOME}/.datahub/*` は compose では上書きできない（方針変更）**
+
+`podman compose config` の出力で確認した結果，3.5 の想定が誤っていた．
+
+| 試した方法 | 結果 |
+| --- | --- |
+| 同じ target を短縮構文＋`:z` で書く | 置換されず**二重マウント**になる（podman-compose 1.6.0 は long syntax の既存エントリと target で突き合わせない） |
+| `volumes: !override` を使う | `${HOME}` が展開されず `volume [${HOME}/.datahub/plugins] not defined in top level` で落ちる（ports で踏んだ既知の不具合と同じ） |
+
+そのため compose ではなく `datahub/scripts/lib.sh` の `ensure_host_dirs` で
+`chcon -Rt container_file_t ${HOME}/.datahub` する方式に変更した．
+`${HOME}/.aws` は「汎用ディレクトリを勝手に作らない」方針を崩さないため触らない．
+
+自前のファイルである `examples/postgres/compose.yml` は短縮構文なので
+`:ro,z` をそのまま書ける（`config` で反映を確認済み）．
+
+**bash 3.2（macOS 既定）での空配列展開**
+
+`set -u` 下で空配列を `"${arr[@]}"` と展開すると unbound variable になるため，
+`${arr[@]+"${arr[@]}"}` の形にする必要がある（実測）．
+
+**まだ未確認のまま残るもの**
+
+- 実 Linux 機（rootless）で `--add-host` 経由の到達が実際に通るか．
+  上記は machine 内の rootful podman での確認にとどまる．
+- WSL2 での cgroup バージョンと `mem_limit` の効き方．
+- Windows + Podman Desktop の `podman machine inspect` が返す単位．
+- 各ディストリ同梱の podman / podman-compose の版数分布（下限 4.7 / 1.6.0 の妥当性）．

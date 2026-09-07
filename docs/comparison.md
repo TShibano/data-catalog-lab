@@ -4,7 +4,7 @@
 
 - 検証日: 2026-09-05．
 - 対象バージョン: OpenMetadata **2.0.1** ／ DataHub **1.7.0**．本ドキュメントの内容はこの 1 回・このバージョンの組み合わせでの検証結果であり，将来のバージョンでは状況が変わりうる．
-- 検証環境: podman 6.1.1／podman-compose 1.6.0（`podman compose` の external provider として利用）／podman machine: CPU 4・メモリ 9.3GiB（9536MiB）・ディスク 40GB／ホストは Apple Silicon（arm64）の macOS．
+- 検証環境: podman 6.1.1／podman-compose 1.6.0（`podman compose` の external provider として利用）／podman machine: CPU 4・メモリ 9.3GiB（9536MiB）・ディスク 40GB／ホストは Apple Silicon（arm64）の macOS．**スクリプトは Linux / WSL2 でも動くようにしてあるが（Issue #2），本ドキュメントの検証結果はすべて上記 macOS 環境での実測であり，Linux 上での再実行はしていない．**
 - 検証方法の限定（重要）: 両ツールとも**操作はすべて REST API（curl）経由**で行った．ブラウザで UI を開いての操作・目視確認は一切していない．そのため **UI の使い勝手についてはこのドキュメントでは評価しない**（両ツールとも「未評価」）．なお，後述の「システムスキーマの既定の扱い」の問題は，利用者が実際にブラウザで OpenMetadata の Explore を開き，情報スキーマ混入分も含めて 816 件が並びサンプルデータが見つけにくいと報告したことが発端である．これは取り込み件数の問題を UI 上で発見したという経緯であり，UI の使い勝手そのものを評価したわけではないため，UI の使い勝手は引き続き「未評価」のまま扱う．
 - 起動時間・実メモリ使用量（`podman stats` 相当）は計測していない．**未計測**．理由: `podman compose up -d` 自体が `depends_on: condition: service_healthy` を待って返るため，スクリプト側の待機ループの経過時間はツール間で公平に比較できる形で記録できていない．
 

@@ -11,15 +11,15 @@ PG_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # shellcheck source=../../../shared/scripts/common.sh
 source "${SCRIPT_DIR}/../../../shared/scripts/common.sh"
+# shellcheck source=../../../shared/scripts/preflight.sh
+source "${SCRIPT_DIR}/../../../shared/scripts/preflight.sh"
 
 CONTAINER_NAME="sample_postgres"
 DB_USER="sample_user"
 DB_NAME="sampledb"
 
-require_podman
-ensure_machine 2048
-check_disk 2
-compose_cmd
+# 前提チェック（podman / compose provider / 依存コマンド / メモリ・ディスク）．
+preflight 2048 2
 
 cd "${PG_DIR}"
 

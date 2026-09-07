@@ -43,8 +43,38 @@ data-catalog-lab/
 
 ## 前提環境
 
-- [Podman](https://podman.io/)
-- [podman-compose](https://github.com/containers/podman-compose)（または Podman の compose 互換コマンド）
+- [Podman](https://podman.io/) **4.7 以上**
+  （rootless で `host.containers.internal` を解決できる版．インジェストがサンプル DB へ到達するのに要る）
+- [podman-compose](https://github.com/containers/podman-compose) **1.6.0 以上**，
+  または `docker compose` **2.24 以上**（compose ファイルの `!override` タグを解釈できる版）
+- `curl` / `python3` / `base64`（起動待機・インジェスト結果の検証に使う）
+
+ディストリ同梱の podman / podman-compose は上記より古いことがある．
+前提を満たしているかは次で確認できる（各 `up.sh` も起動前に同じ検査をする）．
+
+```sh
+./shared/scripts/preflight.sh
+```
+
+### 対応 OS
+
+| 実行環境 | 対応 |
+| --- | --- |
+| macOS（`podman machine` 経由） | 対応．検証済み |
+| Linux ネイティブ（rootless / rootful） | 対応 |
+| Windows + WSL2（ディストリの中に Podman を入れる） | 対応．Linux ネイティブと同じ扱い |
+| Windows + Podman Desktop（`podman machine`） | 対応．macOS と同じ扱い |
+| Windows ネイティブ（Git Bash / MSYS2 / PowerShell） | **非対応** |
+
+スクリプトは `podman machine` の有無で振る舞いを変える．OS 名では判定しない．
+
+**Windows では WSL2 のディストリの中で実行すること．** Git Bash や MSYS2 から
+直接動かすとパス変換で `podman run` のマウント指定が壊れるため対象外とし，
+`preflight` が明示的にエラーで止める．
+
+補足: rootless かつ cgroup v1 の環境では compose の `mem_limit` が無視される
+（podman が警告を出して続行する）．メモリを取り合って OOM しやすくなるため，
+cgroup v2 の環境を推奨する．
 
 ## 使い方
 

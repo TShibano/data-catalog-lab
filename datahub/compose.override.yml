@@ -32,6 +32,19 @@
 # system-update-quickstart（起動時に一度だけ走るマイグレーションジョブ）は
 # 対象に含めていない．upstream で足りているため触らない．
 
+# --- SELinux 環境の bind mount をここで扱わない理由（実機確認・2026-09-07） ---
+# Fedora / RHEL 系（SELinux enforcing）では，再ラベルしていない bind mount は
+# コンテナから読めず Permission denied になる．upstream の ${HOME}/.datahub/* の
+# bind mount に `:z` を付けたいが，この override では実現できなかった．
+# - short syntax で同じ target を書く: 置換されず**二重マウント**になる
+#   （podman-compose 1.6.0 は long syntax の既存エントリを target キーで
+#    突き合わせない．`config` の出力で確認済み）．
+# - `volumes: !override` を使う: !override の中で ${HOME} が展開されず，
+#   `volume [${HOME}/.datahub/plugins] not defined in top level` で落ちる
+#   （ports で踏んだ既知の不具合と同じ）．
+# そのため再ラベルは compose ではなく scripts/lib.sh の ensure_host_dirs で
+# ホスト側ディレクトリに chcon して行う．
+
 services:
   mysql:
     ports: !override
