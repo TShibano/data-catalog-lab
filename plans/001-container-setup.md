@@ -204,8 +204,12 @@ services:
    OpenMetadata（8080 Airflow / 9200 ES / 3306 MySQL）と DataHub（8080 GMS / 9200 OpenSearch / 3306 MySQL）が重複する．
    方針: **既定では同時起動しない**．同時比較したい場合に備え，`compose.override.yml` でホスト側ポートをずらせるようにしておく．
    実装上の注意は 5.3 を参照（`ports` は素直に上書きできない）．
+   → **この方針は Issue #3 で撤回した（2026-09-07）**．衝突しないポート割り当てを常時の既定にし，
+   同時起動を正式に対応した．`plans/004-issue3-concurrent-startup.md` を参照．
 5. **リソース同時消費**
    両スタック合計で 14GB 超のメモリを要求するため，同時起動は現実的でない．比較は「片方ずつ起動 → 観点を記録」の手順とする．
+   → **これも Issue #3 で撤回した（2026-09-07）**．`podman machine` を 18GiB へ拡張することで
+   同時起動できるようにした（実測の実メモリ使用量は約 10.4GB）．
 6. **バージョン固定**
    OpenMetadata 2.0.1 / DataHub 1.7.0 を `versions.env` に固定．`latest` は使わない．
 

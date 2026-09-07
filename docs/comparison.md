@@ -4,7 +4,7 @@
 
 - 検証日: 2026-09-05．
 - 対象バージョン: OpenMetadata **2.0.1** ／ DataHub **1.7.0**．本ドキュメントの内容はこの 1 回・このバージョンの組み合わせでの検証結果であり，将来のバージョンでは状況が変わりうる．
-- 検証環境: podman 6.1.1／podman-compose 1.6.0（`podman compose` の external provider として利用）／podman machine: CPU 4・メモリ 9.3GiB（9536MiB）・ディスク 40GB／ホストは Apple Silicon（arm64）の macOS．**スクリプトは Linux / WSL2 でも動くようにしてあるが（Issue #2），本ドキュメントの検証結果はすべて上記 macOS 環境での実測であり，Linux 上での再実行はしていない．**
+- 検証環境: podman 6.1.1／podman-compose 1.6.0（`podman compose` の external provider として利用）／podman machine: CPU 4・メモリ 18GiB（18432MiB）・ディスク 60GB（Issue #3 の同時起動対応で 9.3GiB から拡張．拡張前の単体起動の検証結果は据え置き）／ホストは Apple Silicon（arm64）の macOS．**スクリプトは Linux / WSL2 でも動くようにしてあるが（Issue #2），本ドキュメントの検証結果はすべて上記 macOS 環境での実測であり，Linux 上での再実行はしていない．**
 - 検証方法の限定（重要）: 両ツールとも**操作はすべて REST API（curl）経由**で行った．ブラウザで UI を開いての操作・目視確認は一切していない．そのため **UI の使い勝手についてはこのドキュメントでは評価しない**（両ツールとも「未評価」）．なお，後述の「システムスキーマの既定の扱い」の問題は，利用者が実際にブラウザで OpenMetadata の Explore を開き，情報スキーマ混入分も含めて 816 件が並びサンプルデータが見つけにくいと報告したことが発端である．これは取り込み件数の問題を UI 上で発見したという経緯であり，UI の使い勝手そのものを評価したわけではないため，UI の使い勝手は引き続き「未評価」のまま扱う．
 - 起動時間・実メモリ使用量（`podman stats` 相当）は計測していない．**未計測**．理由: `podman compose up -d` 自体が `depends_on: condition: service_healthy` を待って返るため，スクリプト側の待機ループの経過時間はツール間で公平に比較できる形で記録できていない．
 
@@ -21,7 +21,7 @@
 | compose 上のサービス数 | 5（`mysql` / `elasticsearch` / `execute-migrate-all` / `openmetadata-server` / `ingestion`．うち `execute-migrate-all` は初回のみ実行されるマイグレーションジョブ） | 7（`mysql` / `opensearch` / `kafka-broker` / `system-update-quickstart` / `datahub-gms-quickstart` / `frontend-quickstart` / `datahub-actions-quickstart`．うち `system-update-quickstart` は初回のみ実行されるシステム更新ジョブ） |
 | スタック本体のイメージ合計サイズ（実測，概算） | 約 7.8GB（db 520MB + server 669MB + elasticsearch 991MB + ingestion 5.58GB） | 約 7.25GB（gms 1.56GB + frontend 932MB + actions 1.4GB + upgrade 977MB + kafka 564MB + opensearch 1.16GB + mysql 654MB） |
 | 本リポジトリで作った `Containerfile.ingestion` のイメージサイズ（実測） | 5.6GB（公式 ingestion イメージ自体が Airflow 込みで大きいため） | 456MB（`python:3.11-slim` + `acryl-datahub` の pip install のみ） |
-| `up.sh` が podman machine に要求するメモリ | 6144MiB（6GB） | 8192MiB（8GB） |
+| `up.sh` が要求するメモリ（単体起動時） | 6144MiB（6GB） | 8192MiB（8GB） |
 | `compose.override.yml` の `mem_limit` 合計（常駐サービスのみ） | 7g（mysql 1g + elasticsearch 2g + server 2g + ingestion 2g） | 8g（mysql 1g + opensearch 2g + kafka-broker 1g + gms 2g + frontend 1g + actions 1g） |
 | 配布形態 | GitHub Release の `docker-compose.yml`（リリースタグ固定） | GitHub 上の quickstart profile 版 `docker-compose.yml`（ブランチ/タグ参照） |
 | `--profile` の要否 | 不要 | 必須．全 7 サービスに `profiles:` が付いており，`--profile quickstart` を指定しないと 1 つも起動しない |
@@ -30,8 +30,8 @@
 | メタデータ／リネージの実行単位 | 別パイプライン（`source.type: postgres` と `postgres-lineage` を分けて 2 回 `metadata ingest` を実行） | 単一 recipe（`include_view_lineage: true`）で 1 回の `datahub ingest` に統合 |
 | システムスキーマの既定の扱い | 既定で `information_schema` まで取り込む（未設定時は 816 エンティティ．`schemaFilterPattern.includes: ["^public$"]` を明示して `public` のみ 38 件に絞り込み済み） | 既定で `public` の 5 データセットのみを取り込み，システムスキーマは自動的に除外される |
 | 今回のリネージ検証（`customer_order_summary`） | 上流 3 テーブル，列単位マッピング 7 件（API レスポンス実測） | 上流 3 データセット，`fineGrainedLineages` 6 件（API レスポンス実測） |
-| ポート衝突（既定起動時） | 3306 / 9200,9300 / 8080 が DataHub と衝突 | 3306 / 9200 / 8080 が OpenMetadata と衝突 |
-| 同時起動の回避策 | `OM_ALT_PORTS=1`（mysql→13306, es→19200/19300, ingestion→18080．server の 8585/8586 は据え置き） | `DATAHUB_ALT_PORTS=1`（mysql→23306, opensearch→29200, gms→28080．frontend の 9002 は据え置き） |
+| upstream 既定のポート衝突 | 3306 / 9200,9300 / 8080 が DataHub と衝突 | 3306 / 9200 / 8080 が OpenMetadata と衝突 |
+| 本リポジトリでのポート割り当て | mysql 13306 / es 19200,19300 / Airflow 18080（UI 8585・admin 8586 は upstream 既定のまま） | mysql 23306 / opensearch 29200（UI 9002・GMS 8080・kafka 9092 は upstream 既定のまま） |
 | UI の使い勝手 | 未評価（API 経由でのみ操作） | 未評価（API 経由でのみ操作） |
 | 起動時間・実メモリ使用量 | 未計測 | 未計測 |
 
@@ -69,7 +69,7 @@ DataHub の upstream compose は全サービスに `profiles:` が付与され�
 - `datahub ingest` が終了時に利用統計を `track.datahubproject.io` へ送ろうとし，このホストに到達できない環境では接続タイムアウトのリトライで数分ハングした．`DATAHUB_TELEMETRY_ENABLED=false` を渡すことで解消した．
 
 **両者共通（ツールの差ではなく環境側の話）**
-- podman-compose 1.6.0 は `!override` タグで包んだノードの中で `${VAR}` を展開しない不具合があり，両ツールの `compose.override.yml` / `compose.altports.yml` でポート番号を変数ではなくリテラル値で書く必要があった．これは OpenMetadata・DataHub どちらのツール自体の問題でもなく，本リポジトリが使っている podman-compose のバージョン固有の制約として位置づけている．
+- podman-compose 1.6.0 は `!override` タグで包んだノードの中で `${VAR}` を展開しない不具合があり，両ツールの `compose.override.yml` でポート番号を変数ではなくリテラル値で書く必要があった．これは OpenMetadata・DataHub どちらのツール自体の問題でもなく，本リポジトリが使っている podman-compose のバージョン固有の制約として位置づけている．
 
 ## インジェストの実行モデル
 
@@ -119,8 +119,27 @@ OpenMetadata はインジェストに JWT（`ingestion-bot` のトークン）�
 
 **検証していないこと**: `order_details`（もう一方のビュー）についてはリネージ API を個別に叩いていない．OpenMetadata 側はメタデータ取り込みログでテーブル・ビューとして処理されたことのみ確認し，DataHub 側は Aspect 集計表で View 2 件・query 2 件が処理されたことから両ビューにリネージが生成された可能性は高いが，`order_details` を対象にした API 呼び出しでの個別確認はしていない．また DataHub 側の `datasetProperties`（description に相当）についても，書き込まれた件数（Table 3 / View 2）は Aspect 集計表で確認したが，**中身の文字列を API で取得して `COMMENT ON` の内容と突き合わせる確認はしていない**．OpenMetadata 側は前述の通り `description` の文字列そのものを確認済みであり，この点は両ツールで確認の深さが揃っていない．
 
-## ポート衝突とリソース
+## ポート衝突とリソース（同時起動）
 
-OpenMetadata と DataHub は既定設定のまま同時に起動すると 3306（mysql），9200（Elasticsearch／OpenSearch），8080（OpenMetadata の ingestion＝Airflow webserver／DataHub の gms）の 3 ポートが衝突する．本リポジトリでは `OM_ALT_PORTS=1` / `DATAHUB_ALT_PORTS=1` でホスト側ポートをずらせるようにしてあり，UI ポート（OpenMetadata 8585 / DataHub 9002）はどちらの回避策でも変更しない．
+OpenMetadata と DataHub は upstream の既定設定のままだと 3306（mysql），9200（Elasticsearch／OpenSearch），8080（OpenMetadata の ingestion＝Airflow webserver／DataHub の gms）の 3 ポートが衝突する．本リポジトリでは衝突しないポート割り当てを**常時の既定**として固定し（Issue #3），両スタックを同時に起動できるようにした．割り当ての一覧と規則は README.md の「ポート割り当て」を参照．UI ポート（OpenMetadata 8585 / DataHub 9002）と DataHub GMS の 8080 は upstream 既定のまま維持している．
 
-今回の検証では両スタックを**同時に起動して動かす実機確認はしていない**（メモリの制約もあり，方針としても行わない）．`DATAHUB_ALT_PORTS=1` 時のポート組み替え（GMS が 8080→28080 になり，インジェスト recipe の接続先もそれに追従すること）は，`datahub/scripts/lib.sh` の `dh_compose_files()` の出力を実行して機械的に確認した．OpenMetadata 側の `OM_ALT_PORTS=1` および両スタック同時起動そのものについては，このドキュメント作成時点で改めての実機検証はしていない．
+### 同時起動の実測（2026-09-07）
+
+`podman machine` を 9.3GiB から **18GiB（18432MiB）**へ拡張した上で，サンプル DB → OpenMetadata → DataHub の順に起動し，**13 コンテナの同時稼働を実機で確認した**．両ツールの `status.sh` はいずれも「正常に稼働している」を返し，UI（8585 / 9002）と API（8586 / 8080）へ同時に到達できた．
+
+| 項目 | 実測 |
+| --- | --- |
+| 起動所要時間（イメージ pull 済み・OpenMetadata） | 45 秒 |
+| 起動所要時間（イメージ pull 済み・DataHub，OpenMetadata 稼働中に起動） | 53 秒 |
+| 実メモリ使用量の合計（`podman stats`，13 コンテナ） | 約 10.4GB |
+| 内訳: OpenMetadata 5 コンテナ | 約 5.2GB（elasticsearch 1.71 + ingestion 1.78 + server 1.14 + mysql 0.59） |
+| 内訳: DataHub 7 コンテナ | 約 5.2GB（gms 1.57 + opensearch 1.33 + frontend 0.57 + kafka 0.49 + mysql 0.48 + actions 0.26 + system-update 0.48） |
+| 内訳: サンプル DB | 0.06GB |
+
+**`mem_limit` の合計（15.5g）に対し，実使用は約 10.4GB だった**．`mem_limit` は各サービスのヒープ設定から余裕を見て決めた上限であり，定常状態の実使用はそれを下回る．とはいえ起動直後のマイグレーションジョブや，インジェスト実行中はこれより増えるため，要求値は `mem_limit` 合計ベース（16GB）のまま据え置いている．
+
+両スタックが同時に動いている状態で `ingest.sh` を両方実行し，どちらも検証まで通ることも確認した（OpenMetadata: public 5 件・検索ヒット・上流エッジ 3 件，DataHub: 検索ヒット・上流データセット 3 件）．単体起動時と同じ結果になっており，同時起動によるインジェストへの影響は見られなかった．
+
+起動時間は 1 分前後で，同時起動でも実用上の問題はなかった（CPU 4 のまま．増やす必要は認められなかった）．これは**イメージ pull 済み**の状態での計測であり，初回はイメージ取得の時間が別途かかる．
+
+なお，この実測は前掲の「検証環境」のうち machine のメモリ・ディスクだけを拡張した状態で行っており，バージョンなど他の条件は変えていない．拡張前に取った単体起動時の各種比較結果は再取得していない．
