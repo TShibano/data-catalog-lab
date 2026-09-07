@@ -79,6 +79,14 @@ uses_podman_machine() {
   podman machine list --format '{{.Name}}' 2>/dev/null | grep -q .
 }
 
+# compose プロジェクトのコンテナが 1 つでも起動中かどうか．
+# 引数1: compose プロジェクト名（versions.env の *_COMPOSE_PROJECT）．
+# ラベル名は podman-compose 1.6.0 が付ける com.docker.compose.project を使う（実測）．
+# 「他方のスタックが起動中なら同時起動として扱う」判定に使う．
+compose_project_running() {
+  [ -n "$(podman ps --filter "label=com.docker.compose.project=$1" --format '{{.Names}}' 2>/dev/null)" ]
+}
+
 # --- 依存コマンドとバージョン ---
 
 # 必要な podman / compose provider のバージョン下限．

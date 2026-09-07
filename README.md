@@ -56,6 +56,56 @@ data-catalog-lab/
 ./shared/scripts/preflight.sh
 ```
 
+### リソース要件
+
+両ツールは同時に起動できる．必要なメモリは各 `compose.override.yml` の `mem_limit` の合計から決めており，`up.sh` は起動前にこれを検査する（他方のスタックが起動中なら，自動的に同時起動用の要求値で検査する）．
+
+| 起動する構成 | メモリ | ディスク（イメージ + ボリューム） |
+| --- | --- | --- |
+| OpenMetadata + サンプル DB | 6GB | 13GB |
+| DataHub + サンプル DB | 8GB | 13GB |
+| **両方 + サンプル DB（同時起動）** | **16GB** | **25GB** |
+
+内訳（`mem_limit` の合計）は OpenMetadata 7g（mysql 1 + elasticsearch 2 + server 2 + ingestion 2），DataHub 8g（opensearch 2 + kafka 1 + gms 2 + frontend 1 + mysql 1 + actions 1），サンプル DB 0.5g で計 15.5g．残りは起動時のマイグレーションジョブ（`execute-migrate-all` / `system-update-quickstart`）の分．
+
+macOS や Windows + Podman Desktop では，この要求を満たすように `podman machine` を広げておく（同時起動には **18GiB 以上**を推奨．要求 16GB に対して余裕を持たせた値）．
+
+```sh
+podman machine stop
+podman machine set --memory 18432 --disk-size 60
+podman machine start
+```
+
+不足したまま `up.sh` を実行すると，上と同じ手順を案内して停止する（スクリプトが machine を勝手に作り直すことはない）．Linux ネイティブ / WSL2 では物理メモリを増やせないため，不足していても警告のみで続行する．
+
+### ポート割り当て
+
+同時起動できるよう，ホスト側の公開ポートは衝突しない値で**固定**してある．起動方法による切り替えはない．
+
+| ツール | サービス | 用途 | ポート | upstream 既定 |
+| --- | --- | --- | --- | --- |
+| OpenMetadata | openmetadata-server | UI / REST API | **8585** | 8585 |
+| OpenMetadata | openmetadata-server | admin（healthcheck） | **8586** | 8586 |
+| OpenMetadata | ingestion | Airflow UI | **18080** | 8080 |
+| OpenMetadata | mysql | メタデータ DB | **13306** | 3306 |
+| OpenMetadata | elasticsearch | 検索（HTTP） | **19200** | 9200 |
+| OpenMetadata | elasticsearch | 検索（transport） | **19300** | 9300 |
+| DataHub | frontend-quickstart | UI | **9002** | 9002 |
+| DataHub | datahub-gms-quickstart | GMS API | **8080** | 8080 |
+| DataHub | datahub-gms-quickstart | OpenTelemetry | **4319** | 4319 |
+| DataHub | mysql | メタデータ DB | **23306** | 3306 |
+| DataHub | opensearch | 検索（HTTP） | **29200** | 9200 |
+| DataHub | kafka-broker | Kafka | **9092** | 9092 |
+| 共通 | examples/postgres | サンプル DB | **5432** | 5432 |
+
+割り当ての規則は次のとおり．
+
+- UI と API のポートは upstream の既定を維持する（公式ドキュメントや `datahub` CLI の既定と食い違わせないため）．
+- 衝突する裏方サービスは両方ともずらし，OpenMetadata は `1xxxx`，DataHub は `2xxxx` を接頭とする．番号を見ればどちらのツールか分かる．
+- そのため **mysql や検索エンジンへホストから直接繋ぐときは upstream 既定のポートでは繋がらない**．この表を唯一の参照先とすること．
+
+ポート番号は各 `compose.override.yml` にリテラルで書いてある（podman-compose 1.6.0 が `!override` タグ内で `${VAR}` を展開しない不具合があるため，変数に寄せられない）．スクリプトがホストから叩くポートだけは `shared/scripts/versions.env` にも定義しており，変更時はこの表と 2 箇所を手で揃える必要がある．
+
 ### 対応 OS
 
 | 実行環境 | 対応 |
@@ -110,6 +160,25 @@ cgroup v2 の環境を推奨する．
 
 起動後 http://localhost:9002 を開く（初期ユーザ `datahub` / `datahub`）．
 
+### 両方を同時に起動して比較する
+
+ポートが衝突しないように固定してあるため，順に起動するだけで両方を同時に動かせる．先に「リソース要件」のメモリを満たしておくこと．
+
+```sh
+./examples/postgres/scripts/up.sh
+./openmetadata/scripts/up.sh
+./datahub/scripts/up.sh
+```
+
+起動後は http://localhost:8585 （OpenMetadata）と http://localhost:9002 （DataHub）を並べて開ける．インジェストも両方に対して実行できる．
+
+```sh
+./openmetadata/scripts/ingest.sh
+./datahub/scripts/ingest.sh
+```
+
+2 つ目のスタックを起動するとき，`up.sh` は他方が起動中であることを検知して同時起動用の要求値（16GB / 25GB）で前提チェックを行う．
+
 ### インジェストする
 
 サンプル DB を各ツールへ取り込み，検索・リネージ API で結果を検証する（内容は `docs/comparison.md` 参照）．サンプル DB とインジェスト対象のツールの両方が起動している必要がある．
@@ -138,8 +207,6 @@ cgroup v2 の環境を推奨する．
 ```
 
 ボリュームごと消す場合は `--purge` を付ける．
-
-> 両ツールはポート（8080 / 9200 / 3306）とメモリを取り合うため，同時には起動しない．どうしても同時に起動したい場合は `OM_ALT_PORTS=1 ./openmetadata/scripts/up.sh` / `DATAHUB_ALT_PORTS=1 ./datahub/scripts/up.sh` でポートをずらせるが，メモリ要求（合計 14GB 超）は変わらないため推奨はしない．
 
 ## 比較検証
 

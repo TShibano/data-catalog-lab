@@ -3,9 +3,9 @@ set -euo pipefail
 
 # DataHub スタックを起動する．
 # 使い方: datahub/scripts/up.sh
-#   DATAHUB_ALT_PORTS=1 ./datahub/scripts/up.sh
-#     OpenMetadata と同時起動したい場合，mysql/opensearch/gms のポートをずらす．
-#     frontend-quickstart (9002) は OpenMetadata と衝突しないので変わらない．
+#
+# ポートは OpenMetadata と衝突しない値で固定してあるため，OpenMetadata と同時に
+# 起動できる（割り当ては README.md の「ポート割り当て」を参照）．
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -14,8 +14,15 @@ source "${SCRIPT_DIR}/lib.sh"
 source "${SCRIPT_DIR}/../../shared/scripts/preflight.sh"
 
 # 前提チェック（podman / compose provider / 依存コマンド / メモリ・ディスク）．
-# DataHub は 7 サービス構成で OpenMetadata より要求メモリが大きいため 8GB を要求する．
-preflight 8192 13
+# DataHub は 7 サービス構成で OpenMetadata より要求メモリが大きい（8GB）．
+# OpenMetadata が起動済みなら同時起動になるため，両スタック分の要求値で確認する
+# （単体分で通してしまうと，一番落ちてほしい場面で落ちない）．
+if compose_project_running "${OM_COMPOSE_PROJECT}"; then
+  log_info "OpenMetadata のスタックが起動中．同時起動として両スタック分のリソースを確認する．"
+  preflight "${BOTH_REQUIRED_MEM_MIB}" "${BOTH_REQUIRED_DISK_GB}"
+else
+  preflight "${DATAHUB_REQUIRED_MEM_MIB}" "${DATAHUB_REQUIRED_DISK_GB}"
+fi
 
 ensure_upstream_compose
 ensure_host_dirs
@@ -30,8 +37,6 @@ if ! "${COMPOSE_CMD[@]}" --env-file "${DH_ENV_FILE}" "${DH_PROFILE_ARGS[@]}" "${
   exit 1
 fi
 
-# frontend-quickstart の UI ポートは compose.altports.yml でも変えない方針のため，
-# 常に versions.env の DATAHUB_UI_PORT を使う．
 UI_URL="http://localhost:${DATAHUB_UI_PORT}"
 
 # DataHub は system-update-quickstart の完了待ちなどがあり OpenMetadata より

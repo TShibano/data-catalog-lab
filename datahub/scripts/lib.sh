@@ -10,7 +10,6 @@ DH_DIR="$(cd "${DH_SCRIPT_DIR}/.." && pwd)"
 DH_ENV_FILE="${DH_DIR}/configs/datahub.env"
 DH_UPSTREAM_COMPOSE="${DH_DIR}/compose.upstream.yml"
 DH_OVERRIDE_COMPOSE="${DH_DIR}/compose.override.yml"
-DH_ALTPORTS_COMPOSE="${DH_DIR}/compose.altports.yml"
 
 # shellcheck source=../../shared/scripts/common.sh
 source "${DH_SCRIPT_DIR}/../../shared/scripts/common.sh"
@@ -25,25 +24,14 @@ source "${DH_SCRIPT_DIR}/../../shared/scripts/versions.env"
 DH_PROFILE_ARGS=(--profile quickstart)
 
 # compose に渡す -f 引数を組み立て，グローバル配列 DH_COMPOSE_FILES に入れる．
-# DATAHUB_ALT_PORTS=1 のときだけ compose.altports.yml（OpenMetadata と同時起動する
-# 際のポートずらし）を 3 枚目として重ねる．
+# ポート割り当ては OpenMetadata と同時起動しても衝突しない値で固定してあるため，
+# 重ねる compose ファイルは upstream と override の 2 枚だけで，起動方法による分岐はない．
+# ホスト側から到達する GMS のポートは versions.env の DATAHUB_GMS_PORT を参照する．
 # 呼び出し側は
 #   "${COMPOSE_CMD[@]}" --env-file "${DH_ENV_FILE}" "${DH_PROFILE_ARGS[@]}" "${DH_COMPOSE_FILES[@]}" up -d
 # のように使う．
-#
-# 同時に，ホスト側から到達するときの GMS ポート（DH_GMS_PORT）もここで決める．
-# compose.altports.yml が gms を 8080 -> 28080 にずらすため，DATAHUB_ALT_PORTS の値と
-# ポート番号の対応関係をこの関数 1 箇所にまとめておく（status.sh 等，GMS の URL を
-# 組み立てる側は直接ポート番号を書かずここを参照する）．
-# compose.altports.yml 側でポート番号を変えたら，ここも合わせて変えること．
 dh_compose_files() {
   DH_COMPOSE_FILES=(-f "${DH_UPSTREAM_COMPOSE}" -f "${DH_OVERRIDE_COMPOSE}")
-  DH_GMS_PORT=8080
-  if [ "${DATAHUB_ALT_PORTS:-0}" = "1" ]; then
-    log_info "DATAHUB_ALT_PORTS=1: compose.altports.yml を重ねる（mysql/opensearch/gms のポートをずらす）．"
-    DH_COMPOSE_FILES+=(-f "${DH_ALTPORTS_COMPOSE}")
-    DH_GMS_PORT=28080
-  fi
 }
 
 # compose.upstream.yml が無ければ取得する．

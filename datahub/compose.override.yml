@@ -8,6 +8,15 @@
 #   ホスト側ポートを変えても複合キーが変わるため upstream の bind も残ってしまう．
 #   そのため ports は `!override` タグで明示的に置き換える（OpenMetadata 側と同じ方針）．
 #
+# 【ポート割り当てについて】
+# OpenMetadata と同時に起動できるよう，衝突するホスト側ポートは常にずらしてある
+# （mysql 3306 -> 23306，opensearch 9200 -> 29200）．DataHub 側は 2xxxx を接頭とする．
+# GMS の 8080 / 4319，frontend の 9002，kafka の 9092 は，OpenMetadata 側が
+# Airflow UI を 18080 へずらすことで衝突しなくなるため upstream 既定のまま残す
+# （datahub CLI が GMS の既定を localhost:8080 と見なすため，ここは動かさない）．
+# ポートの全体像は README.md の「ポート割り当て」の表を唯一の参照先とする．
+# ここの値を変えたら README.md の表と shared/scripts/versions.env も合わせること．
+#
 # 【既知の不具合】podman-compose 1.6.0 は `!override` タグで包んだノードの中で
 # ${VAR} / ${VAR:-default} を一切展開しない（OpenMetadata 側の compose.override.yml
 # で実機確認済みの不具合と同じ）．そのため ports の値は変数ではなくリテラル値を
@@ -15,14 +24,10 @@
 # !override で置き換えた後は short syntax（"HOST:CONTAINER"）でよいことを
 # `config` の出力で確認済み．
 #
-# ポートをずらしたい場合（OpenMetadata との同時起動など）は，この override とは
-# 別に compose.altports.yml を 3 枚目として重ねる（scripts/lib.sh の
-# dh_compose_files() / DATAHUB_ALT_PORTS=1 を参照）．
-#
 # --- メモリ制限について ---
-# podman machine のメモリは 9.3GiB（実測）．DataHub の quickstart profile は
-# 7 サービス構成で，同時に立ち上がるとメモリを食い合い OOM しやすいため，
-# 主要な 6 サービスに mem_limit を割り当てる．内訳（合計 8g，機械の 9.3GiB に収まる）．
+# DataHub の quickstart profile は 7 サービス構成で，同時に立ち上がるとメモリを
+# 食い合い OOM しやすいため，主要な 6 サービスに mem_limit を割り当てる．
+# 内訳（合計 8g）．
 #   opensearch                2g（upstream の OPENSEARCH_JAVA_OPTS がヒープ 1024m を要求）
 #   kafka-broker               1g（upstream の KAFKA_HEAP_OPTS がヒープ 512m を要求）
 #   datahub-gms-quickstart     2g（upstream の JAVA_OPTS がヒープ 1g を要求）
@@ -31,6 +36,8 @@
 #   datahub-actions-quickstart 1g（軽量な Python プロセス）
 # system-update-quickstart（起動時に一度だけ走るマイグレーションジョブ）は
 # 対象に含めていない．upstream で足りているため触らない．
+# OpenMetadata と同時に起動する場合は両スタックの合計が要るため，
+# podman machine のメモリ要件は README.md の「リソース要件」を参照．
 
 # --- SELinux 環境の bind mount をここで扱わない理由（実機確認・2026-09-07） ---
 # Fedora / RHEL 系（SELinux enforcing）では，再ラベルしていない bind mount は
@@ -48,12 +55,12 @@
 services:
   mysql:
     ports: !override
-      - "3306:3306"
+      - "23306:3306"
     mem_limit: 1g
 
   opensearch:
     ports: !override
-      - "9200:9200"
+      - "29200:9200"
     mem_limit: 2g
 
   kafka-broker:

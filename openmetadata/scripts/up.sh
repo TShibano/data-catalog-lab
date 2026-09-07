@@ -3,9 +3,9 @@ set -euo pipefail
 
 # OpenMetadata スタックを起動する．
 # 使い方: openmetadata/scripts/up.sh
-#   OM_ALT_PORTS=1 ./openmetadata/scripts/up.sh
-#     DataHub と同時起動したい場合，mysql/elasticsearch/ingestion のポートをずらす．
-#     openmetadata-server (8585/8586) は DataHub と衝突しないので変わらない．
+#
+# ポートは DataHub と衝突しない値で固定してあるため，DataHub と同時に起動できる
+# （割り当ては README.md の「ポート割り当て」を参照）．
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -15,7 +15,14 @@ source "${SCRIPT_DIR}/../../shared/scripts/preflight.sh"
 
 # 前提チェック（podman / compose provider / 依存コマンド / メモリ・ディスク）．
 # machine の有無は preflight 側で判定するため，ここは OS を意識しない．
-preflight 6144 13
+# DataHub が起動済みなら同時起動になるため，両スタック分の要求値で確認する
+# （単体分で通してしまうと，一番落ちてほしい場面で落ちない）．
+if compose_project_running "${DATAHUB_COMPOSE_PROJECT}"; then
+  log_info "DataHub のスタックが起動中．同時起動として両スタック分のリソースを確認する．"
+  preflight "${BOTH_REQUIRED_MEM_MIB}" "${BOTH_REQUIRED_DISK_GB}"
+else
+  preflight "${OM_REQUIRED_MEM_MIB}" "${OM_REQUIRED_DISK_GB}"
+fi
 
 ensure_upstream_compose
 om_compose_files
@@ -29,8 +36,6 @@ if ! "${COMPOSE_CMD[@]}" --env-file "${OM_ENV_FILE}" "${OM_COMPOSE_FILES[@]}" up
   exit 1
 fi
 
-# openmetadata-server の UI ポートは compose.altports.yml でも変えない方針のため，
-# 常に versions.env の OM_UI_PORT を使う．
 UI_URL="http://localhost:${OM_UI_PORT}"
 
 if wait_http "${UI_URL}" 600 5; then
