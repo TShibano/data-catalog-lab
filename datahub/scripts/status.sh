@@ -22,15 +22,22 @@ echo
 
 # upstream compose は container_name を明示していないため，
 # podman-compose が自動採番したコンテナ名（<project>_<service>_1 等）を
-# 決め打ちにせず，compose が付与するラベル（com.docker.compose.service）で
-# 実際のコンテナ名を引く．該当コンテナが無ければヘルスチェック対象から外す．
+# 決め打ちにせず，compose が付与するラベルで実際のコンテナ名を引く．
+# 該当コンテナが無ければヘルスチェック対象から外す．
+#
+# service だけで絞ると，OpenMetadata 側の mysql コンテナも
+# com.docker.compose.service=mysql を持つため，同時起動時に他方のコンテナを
+# 掴みうる．project ラベルと併せて絞ること．
 echo "=== ヘルスチェック ==="
 # healthcheck が定義されているのは upstream 上で
 # datahub-gms-quickstart / kafka-broker / mysql / opensearch の 4 つ．
 HEALTH_SERVICES=(datahub-gms-quickstart kafka-broker mysql opensearch)
 ALL_HEALTHY=1
 for svc in "${HEALTH_SERVICES[@]}"; do
-  cname="$(podman ps -a --filter "label=com.docker.compose.service=${svc}" --format '{{.Names}}' | head -n1)"
+  cname="$(podman ps -a \
+    --filter "label=com.docker.compose.project=${DATAHUB_COMPOSE_PROJECT}" \
+    --filter "label=com.docker.compose.service=${svc}" \
+    --format '{{.Names}}' | head -n1)"
   if [ -z "${cname}" ]; then
     echo "  ${svc}: コンテナが見つからない"
     ALL_HEALTHY=0

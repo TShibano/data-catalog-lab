@@ -15,7 +15,14 @@ source "${SCRIPT_DIR}/../../shared/scripts/preflight.sh"
 
 # 前提チェック（podman / compose provider / 依存コマンド / メモリ・ディスク）．
 # machine の有無は preflight 側で判定するため，ここは OS を意識しない．
-preflight 6144 13
+# DataHub が起動済みなら同時起動になるため，両スタック分の要求値で確認する
+# （単体分で通してしまうと，一番落ちてほしい場面で落ちない）．
+if compose_project_running "${DATAHUB_COMPOSE_PROJECT}"; then
+  log_info "DataHub のスタックが起動中．同時起動として両スタック分のリソースを確認する．"
+  preflight "${BOTH_REQUIRED_MEM_MIB}" "${BOTH_REQUIRED_DISK_GB}"
+else
+  preflight "${OM_REQUIRED_MEM_MIB}" "${OM_REQUIRED_DISK_GB}"
+fi
 
 ensure_upstream_compose
 om_compose_files
