@@ -10,12 +10,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
 source "${SCRIPT_DIR}/lib.sh"
+# shellcheck source=../../shared/scripts/preflight.sh
+source "${SCRIPT_DIR}/../../shared/scripts/preflight.sh"
 
-require_podman
+# 前提チェック（podman / compose provider / 依存コマンド / メモリ・ディスク）．
 # DataHub は 7 サービス構成で OpenMetadata より要求メモリが大きいため 8GB を要求する．
-ensure_machine 8192
-check_disk 13
-compose_cmd
+preflight 8192 13
 
 ensure_upstream_compose
 ensure_host_dirs

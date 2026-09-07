@@ -359,12 +359,6 @@ ensure_resources() {
   check_disk "${2:-13}"
 }
 
-# 互換用の別名．旧 API（ensure_machine）を使っている呼び出し側が残っているため
-# 当面残す．呼び出し側を ensure_resources に移し終えたら削除する．
-ensure_machine() {
-  ensure_memory "${1:-6144}"
-}
-
 # URL が 2xx/3xx を返すまでリトライで待つ．
 # 引数1: URL，引数2: タイムアウト秒（省略時 60），引数3: 間隔秒（省略時 3）．
 # タイムアウトしたら 1 を返す（die はしない．呼び出し側に判断させる）．
