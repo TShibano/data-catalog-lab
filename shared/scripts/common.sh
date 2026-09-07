@@ -204,6 +204,38 @@ compose_cmd() {
   _check_compose_version
 }
 
+# --- Linux ネイティブ向けの補正 ---
+
+# SELinux が enforcing かどうか．
+selinux_enforcing() {
+  [ -r /sys/fs/selinux/enforce ] && [ "$(cat /sys/fs/selinux/enforce 2>/dev/null)" = "1" ]
+}
+
+# bind mount に付ける SELinux の再ラベル指定を返す（enforcing のときだけ ",Z"）．
+# 無条件に付けると macOS（machine 内の virtiofs マウント）で relabel が失敗しうる
+# ため，検出できたときだけ付ける．
+# 使い方: podman run ... -v "${src}:${dst}:ro$(selinux_mount_suffix)"
+selinux_mount_suffix() {
+  if selinux_enforcing; then
+    printf ',Z'
+  fi
+}
+
+# podman run に足すホスト名解決の引数を，グローバル配列 CONTAINER_HOST_ARGS に入れる．
+# コンテナからホストの公開ポートへは host.containers.internal 経由で到達する方針
+# （configs/ 配下の recipe / ingestion 定義がこの名前を書いている）．
+# machine モードでは podman が定義済みなので何も足さない．ネイティブモードでは
+# 版やネットワーク実装によって未定義になりうるため明示する．
+#
+# 空配列になりうるので，呼び出し側は bash 3.2（macOS 既定）でも set -u に
+# 引っかからない ${CONTAINER_HOST_ARGS[@]+"${CONTAINER_HOST_ARGS[@]}"} の形で展開する．
+container_host_args() {
+  CONTAINER_HOST_ARGS=()
+  if ! uses_podman_machine; then
+    CONTAINER_HOST_ARGS=(--add-host=host.containers.internal:host-gateway)
+  fi
+}
+
 # --- リソースチェック（machine モード / ネイティブモード） ---
 
 # podman machine の情報を "name|mem_mib|disk_gb|state" 形式で取得するヘルパー．

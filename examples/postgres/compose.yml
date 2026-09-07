@@ -23,7 +23,10 @@ services:
     volumes:
       - sample-pg-data:/var/lib/postgresql/data
       # ファイル名順（01_schema.sql -> 02_data.sql）に実行される．
-      - ../sample-data:/docker-entrypoint-initdb.d:ro
+      # `z` は SELinux enforcing のディストリで再ラベルするための指定．
+      # 付けないとコンテナから読めず初期化 SQL が走らない．
+      # 非 SELinux 環境（macOS 等）の podman では無視されるので無条件に付けてよい．
+      - ../sample-data:/docker-entrypoint-initdb.d:ro,z
     mem_limit: 512m
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sample_user -d sampledb"]

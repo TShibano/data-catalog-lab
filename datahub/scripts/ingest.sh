@@ -31,6 +31,12 @@ require_podman
 dh_compose_files
 GMS_URL="http://localhost:${DH_GMS_PORT}"
 
+# Linux ネイティブ向けの補正．SELinux enforcing なら bind mount を再ラベルし，
+# host.containers.internal が未定義な環境では --add-host で補う．
+# machine モード（macOS 等）ではどちらも空になり，従来と同じ挙動になる．
+MOUNT_SUFFIX="$(selinux_mount_suffix)"
+container_host_args
+
 # --- 0. 前提の到達確認 ---
 log_info "DataHub GMS への到達を確認する．"
 if ! curl -fsS -o /dev/null "${GMS_URL}/health"; then
@@ -67,8 +73,9 @@ chmod 600 "${TMP_DIR}/${RECIPE_NAME}"
 # （実機で確認済み）．検証環境として外部送信も避けたいので無効化する．
 log_info "recipe (${RECIPE_NAME}, GMS ポート ${DH_GMS_PORT}) でインジェストを実行する．"
 if ! podman run --rm \
+  ${CONTAINER_HOST_ARGS[@]+"${CONTAINER_HOST_ARGS[@]}"} \
   -e DATAHUB_TELEMETRY_ENABLED=false \
-  -v "${TMP_DIR}/${RECIPE_NAME}:/opt/ingestion/configs/recipes/${RECIPE_NAME}:ro" \
+  -v "${TMP_DIR}/${RECIPE_NAME}:/opt/ingestion/configs/recipes/${RECIPE_NAME}:ro${MOUNT_SUFFIX}" \
   "${IMAGE_TAG}" ingest -c "/opt/ingestion/configs/recipes/${RECIPE_NAME}"; then
   die "インジェストに失敗した．"
 fi

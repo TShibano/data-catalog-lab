@@ -73,6 +73,22 @@ ensure_host_dirs() {
   mkdir -p "${HOME}/.datahub/plugins"
   mkdir -p "${HOME}/.datahub/search"
 
+  # SELinux enforcing のディストリでは，再ラベルしていない bind mount を
+  # コンテナから読めない．upstream compose の bind mount に `:z` を付ける手段が
+  # ないため（compose.override.yml のコメント参照），ホスト側のディレクトリを
+  # 直接ラベル付けする．chcon は自分の所有ファイルに対してなら root 不要．
+  if selinux_enforcing; then
+    if command -v chcon >/dev/null 2>&1; then
+      log_info "SELinux enforcing を検出．${HOME}/.datahub を container_file_t にラベル付けする．"
+      if ! chcon -Rt container_file_t "${HOME}/.datahub" 2>/dev/null; then
+        log_warn "${HOME}/.datahub の再ラベルに失敗した．コンテナが plugins/search を読めない場合は次を手で実行すること．
+  chcon -Rt container_file_t ${HOME}/.datahub"
+      fi
+    else
+      log_warn "SELinux enforcing だが chcon が見つからない．コンテナが ${HOME}/.datahub を読めない可能性がある．"
+    fi
+  fi
+
   if [ -d "${HOME}/.aws" ]; then
     mkdir -p "${HOME}/.aws/sso/cache"
   else

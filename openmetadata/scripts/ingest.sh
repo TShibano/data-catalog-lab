@@ -20,6 +20,12 @@ source "${SCRIPT_DIR}/lib.sh"
 IMAGE_TAG="om-ingestion:local"
 OM_BASE_URL="http://localhost:${OM_UI_PORT}"
 
+# Linux ネイティブ向けの補正．SELinux enforcing なら bind mount を再ラベルし，
+# host.containers.internal が未定義な環境では --add-host で補う．
+# machine モード（macOS 等）ではどちらも空になり，従来と同じ挙動になる．
+MOUNT_SUFFIX="$(selinux_mount_suffix)"
+container_host_args
+
 # --- 期待値定数（examples/sample-data/01_schema.sql の内容に対応） ---
 # public スキーマのテーブル総数．
 # テーブル: customers / orders / order_items（3）
@@ -99,7 +105,8 @@ chmod 600 "${TMP_DIR}"/*.yaml
 # --- 4. メタデータインジェスト ---
 log_info "メタデータインジェストを実行する（テーブル・ビュー・コメント）．"
 if ! podman run --rm \
-  -v "${TMP_DIR}/postgres_metadata.yaml:/opt/ingestion/configs/ingestion/postgres_metadata.yaml:ro" \
+  ${CONTAINER_HOST_ARGS[@]+"${CONTAINER_HOST_ARGS[@]}"} \
+  -v "${TMP_DIR}/postgres_metadata.yaml:/opt/ingestion/configs/ingestion/postgres_metadata.yaml:ro${MOUNT_SUFFIX}" \
   "${IMAGE_TAG}" ingest -c /opt/ingestion/configs/ingestion/postgres_metadata.yaml; then
   die "メタデータインジェストに失敗した．"
 fi
@@ -113,7 +120,8 @@ fi
 # （実機で試して WorkflowInitErrorHandler のエラーになることを確認済み）．
 log_info "リネージインジェストを実行する（view -> table のリネージ）．"
 if ! podman run --rm \
-  -v "${TMP_DIR}/postgres_lineage.yaml:/opt/ingestion/configs/ingestion/postgres_lineage.yaml:ro" \
+  ${CONTAINER_HOST_ARGS[@]+"${CONTAINER_HOST_ARGS[@]}"} \
+  -v "${TMP_DIR}/postgres_lineage.yaml:/opt/ingestion/configs/ingestion/postgres_lineage.yaml:ro${MOUNT_SUFFIX}" \
   "${IMAGE_TAG}" ingest -c /opt/ingestion/configs/ingestion/postgres_lineage.yaml; then
   die "リネージインジェストに失敗した．"
 fi
