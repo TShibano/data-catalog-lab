@@ -159,6 +159,12 @@ PostgreSQL 公式イメージの `/docker-entrypoint-initdb.d/` は
 ネットワークも別になる．ネットワークを繋ぐ小細工はせず，
 ホストの公開ポート（5432）を `host.containers.internal` 経由で参照させている．
 
+この名前は macOS（`podman machine` 経由）では podman が自動で定義するが，
+Linux ネイティブでは版やネットワーク実装によって未定義になりうる．
+そのため各 `ingest.sh` は machine を経由しないときだけ
+`--add-host=host.containers.internal:host-gateway` を付けて起動する．
+インジェスト定義（recipe / ingestion yaml）側は OS によらず同じ内容のまま．
+
 取り込みは各ツールの `ingest.sh` が行う．インジェスト定義の実体はこちら．
 
 - OpenMetadata: `openmetadata/configs/ingestion/postgres_metadata.yaml` および

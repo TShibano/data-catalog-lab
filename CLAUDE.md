@@ -38,7 +38,9 @@ Compose owns stack startup; Containerfiles are extension layers (`FROM` the offi
 
 ## Commands
 
-Requires Podman and a compose provider (`podman compose`, which delegates to `podman-compose`).
+Requires Podman 4.7+ and a compose provider (`podman compose`, which delegates to `podman-compose` 1.6.0+), plus `curl` / `python3` / `base64`. `./shared/scripts/preflight.sh` checks all of this; every `up.sh` runs the same check first.
+
+Supported hosts: macOS (`podman machine`), native Linux, and Windows via WSL2 or Podman Desktop. Windows-native shells (Git Bash / MSYS2 / PowerShell) are not supported and are rejected by preflight. Scripts branch on whether a `podman machine` is in use, never on the OS name.
 
 ```sh
 # start / stop a tool's stack
