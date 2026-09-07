@@ -39,11 +39,9 @@ for c in "${HEALTH_CONTAINERS[@]}"; do
 done
 echo
 
-# UI と管理系エンドポイントへの到達確認．
-# openmetadata-server の 8585/8586 は compose.altports.yml でも変更しない方針
-# （DataHub と衝突しないため）なので固定値で良い．UI 側は versions.env の OM_UI_PORT を使う．
+# UI と管理系エンドポイントへの到達確認．ポートは versions.env を参照する．
 UI_URL="http://localhost:${OM_UI_PORT}"
-ADMIN_HEALTHCHECK_URL="http://localhost:8586/healthcheck"
+ADMIN_HEALTHCHECK_URL="http://localhost:${OM_ADMIN_PORT}/healthcheck"
 
 echo "=== 到達確認 ==="
 UI_OK=0

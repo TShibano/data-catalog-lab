@@ -10,7 +10,6 @@ OM_DIR="$(cd "${OM_SCRIPT_DIR}/.." && pwd)"
 OM_ENV_FILE="${OM_DIR}/configs/openmetadata.env"
 OM_UPSTREAM_COMPOSE="${OM_DIR}/compose.upstream.yml"
 OM_OVERRIDE_COMPOSE="${OM_DIR}/compose.override.yml"
-OM_ALTPORTS_COMPOSE="${OM_DIR}/compose.altports.yml"
 
 # shellcheck source=../../shared/scripts/common.sh
 source "${OM_SCRIPT_DIR}/../../shared/scripts/common.sh"
@@ -18,16 +17,12 @@ source "${OM_SCRIPT_DIR}/../../shared/scripts/common.sh"
 source "${OM_SCRIPT_DIR}/../../shared/scripts/versions.env"
 
 # compose に渡す -f 引数を組み立て，グローバル配列 OM_COMPOSE_FILES に入れる．
-# OM_ALT_PORTS=1 のときだけ compose.altports.yml（DataHub と同時起動する際の
-# ポートずらし）を 3 枚目として重ねる．
+# ポート割り当ては DataHub と同時起動しても衝突しない値で固定してあるため，
+# 重ねる compose ファイルは upstream と override の 2 枚だけで，起動方法による分岐はない．
 # 呼び出し側は "${COMPOSE_CMD[@]}" --env-file "${OM_ENV_FILE}" "${OM_COMPOSE_FILES[@]}" up -d
 # のように使う．
 om_compose_files() {
   OM_COMPOSE_FILES=(-f "${OM_UPSTREAM_COMPOSE}" -f "${OM_OVERRIDE_COMPOSE}")
-  if [ "${OM_ALT_PORTS:-0}" = "1" ]; then
-    log_info "OM_ALT_PORTS=1: compose.altports.yml を重ねる（mysql/elasticsearch/ingestion のポートをずらす）．"
-    OM_COMPOSE_FILES+=(-f "${OM_ALTPORTS_COMPOSE}")
-  fi
 }
 
 # compose.upstream.yml が無ければ取得する．

@@ -24,12 +24,9 @@ RECIPE_NAME="postgres_to_datahub.yml"
 
 require_podman
 
-# DATAHUB_ALT_PORTS=1（OpenMetadata と同時起動する場合）では GMS のホスト公開
-# ポートが 8080 -> 28080 にずれる．status.sh と同様に dh_compose_files() で
-# 決めた DH_GMS_PORT を使い，ホスト側の到達確認とコンテナ内から見る
-# host.containers.internal 経由の接続先の両方をこれに合わせる．
-dh_compose_files
-GMS_URL="http://localhost:${DH_GMS_PORT}"
+# GMS のホスト公開ポートは固定（versions.env の DATAHUB_GMS_PORT）．
+# recipe 側もこれと同じ値を直書きしている．
+GMS_URL="http://localhost:${DATAHUB_GMS_PORT}"
 
 # Linux ネイティブ向けの補正．SELinux enforcing なら bind mount を再ラベルし，
 # host.containers.internal が未定義な環境では --add-host で補う．
@@ -53,25 +50,22 @@ log_info "Containerfile.ingestion をビルドする．"
 cd "${DH_DIR}"
 podman build -f Containerfile.ingestion -t "${IMAGE_TAG}" .
 
-# --- 2. recipe の一時コピーに GMS ポートを埋め込む ---
-# configs/recipes/${RECIPE_NAME} はどのポートでも動くよう REPLACE_WITH_GMS_PORT
-# というプレースホルダのままコミットしている．実際のポート（既定 8080 /
-# DATAHUB_ALT_PORTS=1 なら 28080）は起動時にしか決まらないため，ここで
-# 一時ファイルへ sed 置換してからマウントする
-# （OpenMetadata 側で jwtToken を埋め込むのと同じ方式）．
+# --- 2. recipe を一時ディレクトリへコピーする ---
+# recipe には埋め込む値が無くなった（GMS ポートは固定値を直書きしている）が，
+# リポジトリ内のファイルを直接マウントはしない．SELinux enforcing の環境では
+# ${MOUNT_SUFFIX} の ,Z がマウント元を再ラベルしてしまい，リポジトリの
+# 作業ファイルにコンテナ専用のラベルが付くため，一時コピーを挟む．
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-sed "s#REPLACE_WITH_GMS_PORT#${DH_GMS_PORT}#" \
-  "${DH_DIR}/configs/recipes/${RECIPE_NAME}" > "${TMP_DIR}/${RECIPE_NAME}"
-chmod 600 "${TMP_DIR}/${RECIPE_NAME}"
+cp "${DH_DIR}/configs/recipes/${RECIPE_NAME}" "${TMP_DIR}/${RECIPE_NAME}"
 
 # --- 3. インジェスト実行 ---
 # DATAHUB_TELEMETRY_ENABLED=false: acryl-datahub は既定で終了時に利用統計を
 # track.datahubproject.io へ送ろうとし，このホストがサンドボックスから
 # 到達できないため接続タイムアウトのリトライで無駄に待たされる
 # （実機で確認済み）．検証環境として外部送信も避けたいので無効化する．
-log_info "recipe (${RECIPE_NAME}, GMS ポート ${DH_GMS_PORT}) でインジェストを実行する．"
+log_info "recipe (${RECIPE_NAME}, GMS ポート ${DATAHUB_GMS_PORT}) でインジェストを実行する．"
 if ! podman run --rm \
   ${CONTAINER_HOST_ARGS[@]+"${CONTAINER_HOST_ARGS[@]}"} \
   -e DATAHUB_TELEMETRY_ENABLED=false \

@@ -3,9 +3,9 @@ set -euo pipefail
 
 # DataHub スタックを起動する．
 # 使い方: datahub/scripts/up.sh
-#   DATAHUB_ALT_PORTS=1 ./datahub/scripts/up.sh
-#     OpenMetadata と同時起動したい場合，mysql/opensearch/gms のポートをずらす．
-#     frontend-quickstart (9002) は OpenMetadata と衝突しないので変わらない．
+#
+# ポートは OpenMetadata と衝突しない値で固定してあるため，OpenMetadata と同時に
+# 起動できる（割り当ては README.md の「ポート割り当て」を参照）．
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
@@ -30,8 +30,6 @@ if ! "${COMPOSE_CMD[@]}" --env-file "${DH_ENV_FILE}" "${DH_PROFILE_ARGS[@]}" "${
   exit 1
 fi
 
-# frontend-quickstart の UI ポートは compose.altports.yml でも変えない方針のため，
-# 常に versions.env の DATAHUB_UI_PORT を使う．
 UI_URL="http://localhost:${DATAHUB_UI_PORT}"
 
 # DataHub は system-update-quickstart の完了待ちなどがあり OpenMetadata より

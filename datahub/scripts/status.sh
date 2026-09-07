@@ -44,15 +44,11 @@ for svc in "${HEALTH_SERVICES[@]}"; do
 done
 echo
 
-# UI と GMS への到達確認．
-# frontend-quickstart の 9002 は compose.altports.yml でも変更しない方針
-# （OpenMetadata と衝突しないため）なので固定値で良い．
-# GMS は compose.altports.yml で 8080 -> 28080 にずれるため，DH_GMS_PORT
-# （dh_compose_files() が DATAHUB_ALT_PORTS を見て決める）を参照する．
+# UI と GMS への到達確認．ポートは versions.env を参照する．
 # GMS のヘルスエンドポイントは upstream の healthcheck 定義
 # （curl http://datahub-gms:8080/health）に合わせて /health を使う．
 UI_URL="http://localhost:${DATAHUB_UI_PORT}"
-GMS_HEALTH_URL="http://localhost:${DH_GMS_PORT}/health"
+GMS_HEALTH_URL="http://localhost:${DATAHUB_GMS_PORT}/health"
 
 echo "=== 到達確認 ==="
 UI_OK=0
