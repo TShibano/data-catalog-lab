@@ -4,7 +4,7 @@
 対象: Issue #1「examples: S3互換オブジェクトストレージ上のparquetファイルをモチーフにしたサンプルデータセットの作成」
 状態: **検討中**．3.1（ストレージ = MinIO）は決定．
 3.2（リネージの取り方・変換エンジン）は推奨案あり，未確定．
-更新: 2026-09-06
+更新: 2026-09-08
 
 ## 1. 背景
 
@@ -45,8 +45,10 @@ Issue #1 の要求は次の通り．
 | OpenMetadata | `openmetadata-ingestion[datalake-s3]` | pandas / numpy / pyarrow / s3fs / boto3 / fastavro |
 | DataHub | `acryl-datahub[s3]`（`s3-slim` もある） | boto3 / pyarrow / smart-open / tableschema / wcmatch |
 
-DataHub 側に `pyspark` や `pydeequ` は**含まれていない**（プロファイリング用の
-別 extra には含まれる可能性があるが未確認）．
+DataHub 側に `pyspark` や `pydeequ` は**含まれていない**．
+ドキュメントで裏が取れた（2026-09-07）: `s3` ソースのプロファイリングは
+pyarrow + Apache DataSketches の純 Python 実装になっており，
+Spark / Hadoop / PyDeequ / JVM のいずれも不要．
 
 ### 2.3 S3 互換エンドポイントの指定（実測・2026-09-05）
 
@@ -54,8 +56,9 @@ OpenMetadata の `AWSCredentials` に `endPointURL` フィールドが存在す�
 実機で確認した（`awsAccessKeyId` / `awsSecretAccessKey` / `awsRegion` /
 `endPointURL` など）．MinIO や Garage を向けられる．
 
-DataHub 側の `aws_endpoint_url` 相当は**未確認**（`acryl-datahub[s3]` を
-インストールしていないため）．
+DataHub 側も `s3` ソースの `aws_config.aws_endpoint_url` で同じことができる
+（ドキュメント・2026-09-07 に追記）．`iceberg` ソースの場合は
+`catalog.<name>.s3.endpoint`．実機での疎通は未確認．
 
 ### 2.4 リネージが保持する情報（ドキュメント調査・2026-09-06）
 
@@ -122,6 +125,136 @@ SQL はどこにも残らず，コネクタが読みに来る先がない．
 `datahub/compose.upstream.yml` に Airflow は含まれない．
 Airflow を使うと OpenMetadata だけ「既にあるものに DAG を置くだけ」になり，
 **連携能力の差ではなくスタック構成の差**が結果に混ざる．
+
+### 2.7 複数 parquet を 1 テーブルとして束ねられるか（ソース調査・2026-09-07）
+
+「`silver/orders/dt=2024-01-01/part-0.parquet` のような Hive 形式のファイル群を，
+1 つのテーブルとして認識できるか」への回答．
+**両方できるが，やり方が非対称で，OpenMetadata はコネクタの選択を誤ると破綻する．**
+
+#### DataHub: `path_specs` の `{table}` で束ねる
+
+`{table}` が「データセットになるフォルダ」を指し，その配下は何ファイルあっても 1 データセット．
+
+```yaml
+source:
+  type: s3
+  config:
+    path_specs:
+      - include: "s3://lake/silver/{table}/**"   # ** で Hive パーティションを自動検出
+    aws_config:
+      aws_endpoint_url: "http://minio:9000"      # S3 互換エンドポイント指定．存在を確認した
+      aws_access_key_id: ...
+      aws_region: us-east-1
+```
+
+`path_spec.py` で確認した既定値が挙動を決めている．
+
+| 項目 | 既定 | 意味 |
+| --- | --- | --- |
+| `autodetect_partitions` | `true` | `dt=2024-01-01` 形式をパーティションキー/値として自動認識 |
+| `traversal_method` | `MAX` | **最大値のパーティションフォルダしか辿らない**（`ALL` / `MIN_MAX` も選べる） |
+| `sample_files` | `true` | 全列挙せずサンプルからスキーマ推論．ファイル数・サイズ集計は無効化される |
+
+パーティションは `{partition_key[0]}={partition_value[0]}/` の形で明示指定もできる．
+
+#### OpenMetadata: コネクタ選択で挙動が割れる
+
+**Datalake コネクタ（Database service）では束ねられない．**
+`datalake/metadata.py` の `get_tables_name_and_type` は `list_objects_v2` で
+**オブジェクトキーを 1 件ずつ列挙し，各キーをそのまま 1 テーブルとして yield** している．
+パーティションが増えるほどテーブルが増える．バケット内の `openmetadata.json` も
+参照はするが，用途は拡張子のないファイルのフォーマット判定だけ．
+
+**S3 Storage コネクタ（Storage service）なら束ねられる．**
+`openmetadata.json` マニフェストの 1 エントリ = 1 Container で，prefix 配下をまとめて扱う．
+
+```json
+{"entries": [
+  {"dataPath": "silver/*", "depth": 1, "structureFormat": "parquet",
+   "isPartitioned": true, "autoPartitionDetection": true}
+]}
+```
+
+`containerMetadataConfig.json`（main）で確認した仕様は次の通り．
+
+- `dataPath` はグロブ（`*` / `**` / `?`）可．`depth` と併せて 1 エントリを複数コンテナに展開できる．
+- `autoPartitionDetection` で Hive 形式を自動検出，`partitionColumns` で明示定義（自動検出を上書き）．
+- `excludePaths` の既定で `_delta_log` / `_temporary` / `_spark_metadata` / `.tmp` / `_SUCCESS` を除外．
+- スキーマは prefix 配下の**サンプル 1 ファイル**から取る（`list_objects_v2` の先頭 1000 件から選ぶ）．
+- マニフェストはバケット直下のほか，ローカル / HTTP / 別 S3 からのグローバルマニフェストも指定できる．
+
+#### この差が比較材料になる
+
+1. **束ねるコストが非対称．** DataHub は ingestion 側の設定 1 行，OpenMetadata は
+   **データレイク側にマニフェストファイルを置く**（＝レイクの書き手に手を入れる）．
+   実運用での受け入れやすさに直結する．
+2. **エンティティ型が違う．** DataHub は Dataset，OpenMetadata は Table ではなく **Container**．
+   リネージやプロファイリングが Container でどこまで効くかは未確認で，
+   3.2（案 A のリネージ手動登録）の前提に直接響く．
+3. **どちらも全ファイルのスキーマをマージしない．** 代表 1 ファイル（DataHub はサンプル数ファイル）
+   からの推論なので，ファイル間でスキーマが違っても片方しか見えない．
+   DataHub の `traversal_method: MAX` は最新パーティションだけを見るため，
+   2.5 のスキーマ進化シナリオとは相性が良い反面，古い列の消失は拾わない可能性がある．
+
+### 2.8 テーブルフォーマット（Iceberg / Delta Lake）に逃げられるか（ソース調査・2026-09-08）
+
+2.7 の「束ね方が人手の指示頼み」を Iceberg で構造的に解決できないか，という検討．
+**結論: DataHub には効くが，OpenMetadata が Iceberg コネクタを削除したため比較が成立しない．**
+
+**OpenMetadata は Iceberg 対応をやめた．**
+PR [#26365 "Chore: Remove iceberg standalone connector"](https://github.com/open-metadata/OpenMetadata/pull/26365)
+が 2026-04-02 にマージ済み．`pyiceberg` 依存ごと削除され，既存の Iceberg サービスは
+マイグレーションで `CustomDatabase` に移送される．タグで確認したところ
+`1.12.14-release` には `ingestion/.../database/iceberg/` があり，
+`1.13.0-release` / `2.0.1-release` には無い．PR に入った代替は
+「他の対応 DB 上の Iceberg テーブルの型判定改善」であり，方針は
+**「Iceberg は REST カタログを直接読まず，Snowflake / Databricks / Glue / Trino
+などエンジン経由でカタログする」**に変わったと読める．
+
+**DataHub の `iceberg` ソースは現役**で，parquet 直置きの弱点を潰している．
+
+| | Hive 形式 parquet（`s3` ソース） | Iceberg（`iceberg` ソース） |
+| --- | --- | --- |
+| テーブルの束ね方 | `path_specs` の `{table}` で人間が指示 | テーブルメタデータが定義．指示不要 |
+| スキーマ | サンプルファイルから推論 | テーブルメタデータから取得．推論なし |
+| パーティション | パスから自動検出（既定 `MAX`） | partition-spec をそのまま custom property に |
+| プロファイル | pyarrow でデータを読む | **manifest の統計を集計．データを読まない**（行数・null 数・min/max） |
+| リネージ | 無し | **無し** |
+
+カタログは rest / hive / glue / sql に対応し，MinIO は `s3.endpoint` で向けられる．
+
+```yaml
+source:
+  type: iceberg
+  config:
+    catalog:
+      demo:
+        type: rest
+        uri: "http://iceberg-rest:8181"
+        s3.endpoint: "http://minio:9000"
+```
+
+**判断: 本線は Hive 形式 parquet を維持する．** 理由は 3 つ．
+
+1. 両ツールが同じ土俵に乗る唯一の形式．一方が対応をやめた形式で比べても
+   「OpenMetadata は 0 点」以上の情報が出ず，知りたいこと（レイク対応力の差）が測れない．
+   OpenMetadata を土俵に乗せるには Trino 等のエンジンを 1 台足すことになり，
+   2.6 の「連携能力の差ではなくスタック構成の差が混ざる」問題が逆向きに再発する．
+2. **リネージ（3.2）は Iceberg でも解決しない．** Iceberg にも SQL は無いので，
+   手動登録か dbt / Dagster という選択肢の構図は変わらない．
+3. 2.7 の「束ね方の非対称性」自体が良い比較材料であり，これを消してしまうのは惜しい．
+
+Iceberg は次のどちらかの扱いとする．
+
+- **DataHub 単独の追加シナリオ**として小さく足す．「テーブルフォーマットを入れると
+  DataHub 側はここまで楽になる」という材料になり，基盤側の技術選定への示唆にもなる．
+- 基盤で Iceberg 採用が現実味を帯びた時点で，**カタログの選定より先に
+  OpenMetadata の対応状況（Trino 経由になるか）を確認する**．採用可否そのものを左右する．
+
+なお Delta Lake は OpenMetadata にも `deltalake` コネクタが残っているが，
+対応は Metadata と dbt のみで Profiler / Lineage / Owners / Tags は非対応のため，
+比較材料としては薄い．
 
 ## 3. 決定事項と未決事項
 
@@ -242,11 +375,12 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 
 - bucket と prefix の切り方（`bronze/` `silver/` `gold/` を prefix にするか bucket ごと分けるか）
 - パーティションを入れるか（Hive 形式の `dt=2024-01-01/` など）．
-  **両ツールのパーティション認識の差は良い比較材料になりそう**だが，
-  実際にどう見えるかは未確認．
+  2.7 の通り両ツールとも自動検出の仕組みを持つ．**UI にどう出るかは未確認**だが，
+  仕組みの差（DataHub は既定で最新パーティションのみ走査）は既に比較材料になる．
 - 「1 ファイル = 1 テーブル」か「prefix 配下の複数ファイル = 1 テーブル」か．
-  DataHub の `path_specs` と OpenMetadata の Datalake コネクタで
-  書き方も挙動も違うはずだが，未確認．
+  → 2.7 で解決．束ねるなら OpenMetadata は **Storage コネクタ + マニフェスト**が必須で，
+  Datalake コネクタでは 1 ファイル = 1 テーブルにしかならない．
+  **どちらのコネクタで比較するかを決める必要がある**（両方試すのが理想）．
 - スキーマ進化（bronze に列が増える）をシナリオに含めるか．
 
 ## 4. 確認済みのこと / 未確認のこと
@@ -268,11 +402,19 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 - 両ツールのスキーマ変更履歴機能（2.5）．DataHub Timeline API の互換性判定．
 - 自動リネージが成立する 3 経路（2.6）．両ツールに dbt / Dagster / Airflow の
   連携が存在すること．
+- 複数 parquet の束ね方とパーティション認識の仕組み（2.7）．
+  DataHub の `aws_endpoint_url`，`path_specs` の既定値，OpenMetadata の
+  Datalake / S3 Storage 両コネクタの挙動差．いずれもコネクタのソースと
+  JSON スキーマで確認した．
+- OpenMetadata が Iceberg コネクタを 1.13.0 で削除したこと（2.8）．
+  PR とリリースタグのファイル有無で確認した．
 
 **未確認（推測で計画を進めない）**
-- DataHub 側の S3 互換エンドポイント指定方法．
-- 両ツールの parquet スキーマ推論の挙動，パーティションの見え方．
-- `path_specs` / Datalake コネクタの設定の書き方と，複数ファイルの束ね方．
+- 2.7 の挙動が実機でその通りか（スキーマ推論の結果，パーティションの UI での見え方）．
+- OpenMetadata の **Container エンティティ**でリネージ / プロファイリングが
+  どこまで効くか（2.7）．Table 前提の 3.2 の計画に直接響く．
+- OpenMetadata のドキュメントサイトに Iceberg のページが残って見えること（2.8）．
+  コードは 1.13.0 以降に無いため，ドキュメントが古いのか別扱いなのかは未確認．
 - SeaweedFS の版数タグ・arm64 対応・S3 互換性．
 - ディスクとメモリの追加消費量（MinIO 自体は軽いが，parquet 生成と
   インジェスト時の pandas のメモリ使用量は未測定）．
@@ -295,7 +437,8 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 3. 決まったら 3.3 / 3.4 を確定させ，本ファイルに実装ステップ表（`jj` の
    論理単位ごと）を追記する．
 4. 着手前に，未確認項目のうち次の 3 つは小さく実機検証しておくと手戻りが減る．
-   - DataHub の S3 互換エンドポイント指定方法
-   - parquet スキーマ推論の挙動
+   - 2.7 の束ね方が実機で再現するか（DataHub の `path_specs`，
+     OpenMetadata の S3 Storage コネクタ + マニフェスト）
+   - OpenMetadata の Container でリネージが張れるか（案 A の前提）
    - リネージ API に入れた変換記述が UI に出るか（案 A を採る場合，
      ここが出ないと検証の観点 2 が成立しない）
