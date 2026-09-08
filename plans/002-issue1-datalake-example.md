@@ -119,6 +119,21 @@ DataHub の互換性判定は一歩踏み込んでおり，**ここは良い比�
 SQL はどこにも残らず，コネクタが読みに来る先がない．
 つまり **polars から DuckDB に替えてもリネージは自動にならない**（3.2 参照）．
 
+**オーケストレータ経路の受け口は，両ツールで重さが違う（ドキュメント調査・2026-09-08）．**
+実装言語を問わないこの経路は，実際には OpenLineage イベントをどう受けるかの話になる．
+
+| | OpenLineage の受け口 |
+| --- | --- |
+| DataHub | **REST で直接受ける**（`POST GMS_HOST:PORT/api/v2/lineage`）．Spark event listener プラグインは PathSpec とカラム単位に対応 |
+| OpenMetadata | OpenLineage コネクタが **Kafka / Kinesis からイベントを消費する**．間にブローカーが要る |
+
+Dagster については，OpenMetadata に「アセットとデータソース間のリネージが取れない」
+という issue（[#22430](https://github.com/open-metadata/OpenMetadata/issues/22430)）があり，
+2026-01-16 に completed で閉じている．**2025 年内は取れていなかった**．実装内容は未確認．
+
+3.2.1 で「基盤側で Dagster を採用したときに再検討する」としたが，そのときの判断材料は
+**OpenMetadata 側の受け口の重さ（Kafka を立てる必要があるか）**になる．
+
 **Airflow 経路には公平性の落とし穴がある（本リポジトリの compose で確認）．**
 `openmetadata/compose.upstream.yml` は `ingestion` サービスとして Airflow を
 同梱している（`AirflowRESTClient`，`AIRFLOW_*` env，DAG 用ボリューム）が，
@@ -256,6 +271,49 @@ Iceberg は次のどちらかの扱いとする．
 対応は Metadata と dbt のみで Profiler / Lineage / Owners / Tags は非対応のため，
 比較材料としては薄い．
 
+### 2.9 意味づけ層（description / glossary）は parquet でも成立するか（ソース調査・2026-09-08）
+
+「データの意味を自然言語で確認できる」ことはカタログに求める中心的な機能だが，
+description / glossary / tag はカタログ側のエンティティに付く属性なので，
+**書けること自体はストレージに依存しない．** 依存するのは次の 2 つの前提．
+
+#### (a) 説明の初期値をコードから供給できるか
+
+| | 説明の供給経路 |
+| --- | --- |
+| RDB | `COMMENT ON` を両ツールとも吸う．dbt を使えば `schema.yml` の description も流れる．**「コードが正・カタログは写し」が成立する** |
+| parquet | **供給経路が無い** |
+
+DataHub の `schema_inference/parquet.py` の `ParquetInferrer` は pyarrow の
+`schema.names` / `schema.types` だけを `SchemaField` に写しており，
+**Arrow のフィールドメタデータや parquet footer の key-value metadata を
+description に使っていない**（ソース確認）．OpenMetadata の Datalake / Storage も
+同様にスキーマだけを取る．
+
+つまり parquet では説明が**カタログの中にしか存在しない**．リポジトリ側に正本を置けず，
+二重管理になって腐る．対策は 3.2.2 の枠組みがそのまま使える（`descriptions.yml` を並べる）．
+**意味づけを投入する API の使い勝手も比較材料が 1 つ増える**と考えれば，むしろ好都合．
+
+#### (b) 説明を書く先が安定しているか
+
+ここで 2.7 が効いてくる．OpenMetadata の Datalake コネクタは 1 ファイル = 1 テーブルなので，
+パーティションが増えるたびに新しいテーブルが生え，そこに書いた説明は次のインジェストで
+孤児になる．**2.7 は「スキーマがどう見えるか」の問題ではなく，
+意味づけ層が成立するかどうかの前提だった．**
+
+そして OpenMetadata 側は，**Container エンティティに description / glossary term が
+どこまで付くかが未確認**のまま残っている．ここが弱いと
+**「束ねると意味づけできない，束ねないと説明が腐る」**という詰みになりうるため，
+実機確認の最優先項目とする（4 章）．
+
+#### (c) この 2 つから導かれること
+
+カタログが自動でやってくれるのはスキーマの収集と，条件が揃ったときのリネージまでで，
+**意味づけは原則として人間が入れる**．その「条件」を握っているのは基盤側であり
+（2.6 の 3 経路），polars + ファイル直置きレイクはカタログにとって最も情報の少ない構成になる．
+**カタログの価値は基盤の作りに従属する**というのが，ここまでの調査の結論．
+これは 3.2 の検証観点の置き方に直結する．
+
 ## 3. 決定事項と未決事項
 
 ### 3.1 オブジェクトストレージ: MinIO（決定・2026-09-06）
@@ -292,11 +350,23 @@ bronze → silver → gold のリネージは**何もしなければ両ツール
 「dbt コネクタの出来」にずれ，3.1 で MinIO を選んだ理由（新しいツールの
 ノイズを避ける）とも一貫しない．
 
-案 A を採るなら，検証の観点は次の 3 つになる．
+**検証の軸を「自動でどれだけ取れるか」から「手で入れる情報の投入コストと
+維持コスト」に寄せる（2026-09-08 更新）．** 2.9 の通り，parquet 直置きのレイクでは
+リネージも説明も自動では入らない．自動検出能力を測ろうとしても両ツールとも 0 点で
+差が出ず，知りたいことが測れない．実運用で効くのは「入れるのがどれだけ楽か」
+「腐らせずに保てるか」の方であり，案 A はもともとその測り方になっている．
 
-1. **登録の手間** — テーブル辺 / カラム辺 / 変換の自由記述を入れるまでの API 呼び出し数と型定義の重さ．
-2. **UI への出方** — API に入れた `function` / `transformOperation` が実際に画面で読めるか．**入れても表示されないケースがありうるので，ここは実機で見ないと分からない．**
-3. **スキーマ進化** — bronze に列を足したとき，DataHub の Schema History と OpenMetadata の Versions タブでどう見えるか．DataHub の互換性判定が効くかどうか．
+観点は次の 4 つ．
+
+1. **投入コスト** — リネージ（テーブル辺 / カラム辺 / 変換の自由記述）と
+   description / glossary を入れるまでの API 呼び出し数と型定義の重さ．
+2. **UI への出方** — 入れた `function` / `transformOperation` と description が
+   実際に画面で読めるか．**入れても表示されないケースがありうるので，
+   ここは実機で見ないと分からない．**
+3. **維持コスト** — 変換やスキーマを変えたときに，入れた情報が追随するか / 孤児にならないか．
+   再インジェストで手入力が上書きされないか．**腐り方の差がここに出る．**
+4. **スキーマ進化** — bronze に列を足したとき，DataHub の Schema History と
+   OpenMetadata の Versions タブでどう見えるか．DataHub の互換性判定が効くかどうか．
 
 #### 3.2.1 変換エンジンの選択: polars を継続（推奨）
 
@@ -321,21 +391,23 @@ Dagster は「polars のまま自動リネージが取れる」点で筋は悪�
 
 #### 3.2.2 案 A を採る場合の構成
 
-**ツール中立なリネージ記述を自前で 1 枚持つ．**
+**ツール中立な記述を自前で持ち，そこから両ツールに流す．**
+リネージだけでなく，2.9 の description も同じ枠組みに載せる．
 
 ```
 examples/datalake/
-├── transform/        # polars の変換．bronze -> silver -> gold
-├── lineage.yml       # 中立な記述: どの列がどの列から，どう作られたか
+├── transform/          # polars の変換．bronze -> silver -> gold
+├── lineage.yml         # 中立な記述: どの列がどの列から，どう作られたか
+├── descriptions.yml    # 中立な記述: テーブル / カラムの意味（2.9）
 └── register/
-    ├── openmetadata.py   # lineage.yml -> OM の lineageDetails
-    └── datahub.py        # lineage.yml -> DataHub の FineGrainedLineage
+    ├── openmetadata.py   # -> OM の lineageDetails / description
+    └── datahub.py        # -> DataHub の FineGrainedLineage / description（aspect は要確認）
 ```
 
 利点は 3 つ．
 
 1. **比較が綺麗になる** — 同じ入力・2 つのアダプタなので，差分がそのまま
-   リネージ API の手間の差になる（3.2 の観点 1）．
+   リネージ / 意味づけ API の手間の差になる（3.2 の観点 1）．
 2. **変換コードにツールの API が混ざらない** — どちらかのツールを捨てても
    他方が壊れない．
 3. **将来の移行で捨てずに済む** — dbt や Dagster に移っても `lineage.yml` の
@@ -408,11 +480,18 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
   JSON スキーマで確認した．
 - OpenMetadata が Iceberg コネクタを 1.13.0 で削除したこと（2.8）．
   PR とリリースタグのファイル有無で確認した．
+- parquet には description の供給経路が無いこと（2.9）．DataHub の
+  `ParquetInferrer` が名前と型しか写していないことをソースで確認した．
+- OpenLineage の受け口の差（2.6）．DataHub は REST，OpenMetadata は Kafka / Kinesis．
+  OpenMetadata の Dagster リネージ issue #22430 が 2026-01 に completed で
+  閉じていること（実装内容は未確認）．
 
 **未確認（推測で計画を進めない）**
 - 2.7 の挙動が実機でその通りか（スキーマ推論の結果，パーティションの UI での見え方）．
-- OpenMetadata の **Container エンティティ**でリネージ / プロファイリングが
-  どこまで効くか（2.7）．Table 前提の 3.2 の計画に直接響く．
+- **【最優先】** OpenMetadata の **Container エンティティ**で
+  description / glossary term / リネージ / プロファイリングがどこまで効くか（2.7 / 2.9）．
+  ここが弱いと「束ねると意味づけできない，束ねないと説明が腐る」詰みになり，
+  Table 前提で書いた 3.2 の計画が成立しない．
 - OpenMetadata のドキュメントサイトに Iceberg のページが残って見えること（2.8）．
   コードは 1.13.0 以降に無いため，ドキュメントが古いのか別扱いなのかは未確認．
 - SeaweedFS の版数タグ・arm64 対応・S3 互換性．
@@ -437,8 +516,9 @@ bronze 層を「`examples/postgres` の RDB から吸い出した生データ」
 3. 決まったら 3.3 / 3.4 を確定させ，本ファイルに実装ステップ表（`jj` の
    論理単位ごと）を追記する．
 4. 着手前に，未確認項目のうち次の 3 つは小さく実機検証しておくと手戻りが減る．
+   - OpenMetadata の Container に description / glossary / リネージが付くか
+     （案 A の前提．4 章の最優先項目）
    - 2.7 の束ね方が実機で再現するか（DataHub の `path_specs`，
      OpenMetadata の S3 Storage コネクタ + マニフェスト）
-   - OpenMetadata の Container でリネージが張れるか（案 A の前提）
    - リネージ API に入れた変換記述が UI に出るか（案 A を採る場合，
      ここが出ないと検証の観点 2 が成立しない）
